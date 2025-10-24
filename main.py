@@ -17,6 +17,21 @@ from telegram.ext import (
 )
 import os, datetime, calendar, json
 from pathlib import Path
+from flask import Flask
+from threading import Thread
+
+app_keepalive = Flask(__name__)
+
+@app_keepalive.route('/')
+def home():
+    return "Bot is alive!"
+
+def run():
+    app_keepalive.run(host='0.0.0.0', port=8000)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
 
 # ========= CONFIG =========
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8377427445:AAE-H_EiGAjs4NKE20v9S8zFLOv2AiHKcpU")
@@ -575,4 +590,6 @@ async def set_commands(app):
 app.post_init = set_commands
 
 print("🤖 Bot running with persistence + live counter + auto-archive notifications ...")
-app.run_polling()
+if __name__ == "__main__":
+    keep_alive()
+    app.run_polling()
