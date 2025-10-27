@@ -1,10 +1,11 @@
 # ==============================
-# 🏥 Sustainability Redistribution Bot (FINAL)
-# - Persistent JSON listings
+# 🏥 Sustainability Redistribution Bot (Firebase + 24/7 Ready)
+# - Firebase persistent listings
 # - Calendar date selector
 # - Manual pickup time
 # - Live Remaining counter
 # - Auto archive + channel notification
+# - Flask keep-alive (for Koyeb)
 # ==============================
 
 from telegram import (
@@ -19,7 +20,29 @@ import os, datetime, calendar, json
 from pathlib import Path
 from flask import Flask
 from threading import Thread
+import firebase_admin
+from firebase_admin import credentials, db
 
+# ========= FIREBASE SETUP =========
+cred = credentials.Certificate("serviceAccountKey.json")
+firebase_admin.initialize_app(cred, {
+    "databaseURL": "https://cgh-telebot-default-rtdb.asia-southeast1.firebasedatabase.app"
+})
+
+ref = db.reference("listings")
+
+# Load data if any
+LISTINGS = ref.get() or {}
+
+def save_listings():
+    """Save current LISTINGS dictionary to Firebase."""
+    try:
+        ref.set(LISTINGS)
+        print(f"💾 Saved {len(LISTINGS)} listings to Firebase.")
+    except Exception as e:
+        print(f"⚠️ Failed to save listings: {e}")
+
+# ========= KEEP-ALIVE SERVER =========
 app_keepalive = Flask(__name__)
 
 @app_keepalive.route('/')
@@ -38,27 +61,6 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8377427445:AAE-H_EiGAjs4NKE20v9S8zFLOv2AiHKc
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@sustainability_redistribution")
 
 ITEM, QTY, SIZE, EXPIRY, LOCATION, PHOTO, CONFIRM, SUGGEST = range(8)
-
-# ========= STORAGE =========
-STORE = Path("listings.json")
-LISTINGS = {}
-
-def load_listings():
-    global LISTINGS
-    if STORE.exists():
-        try:
-            data = json.loads(STORE.read_text())
-            LISTINGS.update({int(k): v for k, v in data.items()})
-            print(f"📦 Loaded {len(LISTINGS)} listings.")
-        except Exception as e:
-            print("⚠️ Failed to load listings:", e)
-
-def save_listings():
-    try:
-        json.dump({str(k): v for k, v in LISTINGS.items()}, STORE.open("w"))
-    except Exception as e:
-        print("⚠️ Failed to save listings:", e)
-
 
 # ========= CALENDAR =========
 def make_month_calendar(year=None, month=None):
@@ -96,16 +98,13 @@ def make_month_calendar(year=None, month=None):
     rows.insert(0, nav)
     return InlineKeyboardMarkup(rows)
 
-
 # ========= UPDATE CHANNEL POST =========
 async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
-    """Update or archive the channel post correctly for both text and photo messages."""
     l = LISTINGS.get(msg_id)
     if not l:
         return
 
     try:
-        # Build new message text
         if l["remaining"] <= 0:
             text = (
                 f"🧾 <b>{l['item']}</b>\n"
@@ -114,8 +113,6 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
                 f"⏰ Expiry: {l['expiry']}\n"
                 f"📍 {l['location']}"
             )
-
-            # Try editing caption first (photo posts)
             try:
                 await context.bot.edit_message_caption(
                     chat_id=CHANNEL_ID,
@@ -124,7 +121,6 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
                     parse_mode="HTML"
                 )
             except Exception:
-                # If message has no caption (text-only), edit text
                 await context.bot.edit_message_text(
                     chat_id=CHANNEL_ID,
                     message_id=msg_id,
@@ -132,7 +128,6 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
                     parse_mode="HTML"
                 )
 
-            # Send broadcast + notify seller
             await context.bot.send_message(
                 CHANNEL_ID,
                 f"✅ <b>{l['item']}</b> is now fully claimed! 🎉\nThank you for participating ♻️",
@@ -145,7 +140,6 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
             )
             return
 
-        # Item still available → show remaining quantity
         text = (
             f"🧾 <b>{l['item']}</b>\n"
             f"📦 Remaining: {l['remaining']} of {l['qty']}\n"
@@ -153,11 +147,10 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
             f"⏰ Expiry: {l['expiry']}\n"
             f"📍 {l['location']}"
         )
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🤝 Claim", url=f"https://t.me/{context.bot.username}?start=claim_{msg_id}")]
-        ])
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🤝 Claim", url=f"https://t.me/{context.bot.username}?start=claim_{msg_id}")
+        ]])
 
-        # Again — prefer editing caption first
         try:
             await context.bot.edit_message_caption(
                 chat_id=CHANNEL_ID,
@@ -174,20 +167,16 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
                 reply_markup=keyboard,
                 parse_mode="HTML"
             )
-
     except Exception as e:
         print(f"⚠️ Error updating post: {e}")
 
-
 # ========= CANCEL =========
 async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel the current action."""
     if update.callback_query:
         await update.callback_query.edit_message_text("❌ Cancelled. Start again with /start.")
     else:
         await update.message.reply_text("❌ Cancelled. Start again with /start.")
     return ConversationHandler.END
-
 
 # ========= BASIC COMMANDS =========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -226,7 +215,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="HTML")
 
-
 async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "ℹ️ <b>How It Works</b>\n\n"
@@ -237,7 +225,6 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "This ensures efficient reuse and minimizes hospital waste ♻️",
         parse_mode="HTML"
     )
-
 
 # ========= NEW ITEM FLOW =========
 async def newitem(update, context):
@@ -277,34 +264,24 @@ async def calendar_handler(update, context):
         await q.answer("Select a valid day.")
         return EXPIRY
 
-
-# ========= Continue Part 2 (Claim, Approve, Suggest, Setup) =========
-# ========= PHOTO + CONFIRMATION FLOW =========
 async def ask_photo(update, context):
-    """Ask the user to attach a photo or skip."""
     context.user_data["location"] = update.message.text
     await update.message.reply_text("📸 Send a photo of the item or type 'Skip' if none.")
     return PHOTO
 
-
 async def save_photo(update, context):
-    """Save photo file_id and move to confirmation."""
     photo = update.message.photo[-1]
     file = await photo.get_file()
     context.user_data["photo"] = file.file_id
     await confirm_post(update, context)
     return CONFIRM
 
-
 async def skip_photo(update, context):
-    """Skip photo step."""
     context.user_data["photo"] = None
     await confirm_post(update, context)
     return CONFIRM
 
-
 async def confirm_post(update, context):
-    """Preview post before sending to channel."""
     d = context.user_data
     preview = (
         f"🧾 <b>{d['item']}</b>\n"
@@ -321,9 +298,7 @@ async def confirm_post(update, context):
     await update.message.reply_text(preview, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
     return CONFIRM
 
-
 async def post_to_channel(update, context):
-    """Publish item to the Telegram channel."""
     q = update.callback_query
     await q.answer()
     d = context.user_data
@@ -342,11 +317,10 @@ async def post_to_channel(update, context):
     else:
         msg = await context.bot.send_message(CHANNEL_ID, text, parse_mode="HTML")
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🤝 Claim", url=f"https://t.me/{context.bot.username}?start=claim_{msg.message_id}")]
-    ])
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🤝 Claim", url=f"https://t.me/{context.bot.username}?start=claim_{msg.message_id}")
+    ]])
 
-    # Try editing caption first (if photo)
     try:
         await context.bot.edit_message_caption(
             chat_id=CHANNEL_ID, message_id=msg.message_id,
@@ -358,7 +332,6 @@ async def post_to_channel(update, context):
             text=text, reply_markup=keyboard, parse_mode="HTML"
         )
 
-    # Store listing in memory
     LISTINGS[msg.message_id] = {
         "poster_id": q.from_user.id,
         "poster_name": q.from_user.username,
@@ -376,7 +349,6 @@ async def post_to_channel(update, context):
 
 # ========= CLAIM FLOW =========
 async def private_message(update, context):
-    """Handle private chat between buyer and bot."""
     if "claim_step" not in context.user_data:
         return
     msg_id = context.user_data.get("claiming_msg_id")
@@ -397,13 +369,11 @@ async def private_message(update, context):
         pickup_time = update.message.text
         qty = context.user_data["claim_qty"]
         seller_id = l["poster_id"]
-        kb = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("✅ Approve", callback_data=f"approve|{msg_id}|{user.id}|{qty}|{pickup_time}"),
-                InlineKeyboardButton("🕓 Suggest New Date/Time", callback_data=f"suggest|{msg_id}|{user.id}|{qty}"),
-                InlineKeyboardButton("❌ Reject", callback_data=f"reject|{msg_id}|{user.id}|{qty}|{pickup_time}")
-            ]
-        ])
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Approve", callback_data=f"approve|{msg_id}|{user.id}|{qty}|{pickup_time}"),
+            InlineKeyboardButton("🕓 Suggest New Date/Time", callback_data=f"suggest|{msg_id}|{user.id}|{qty}"),
+            InlineKeyboardButton("❌ Reject", callback_data=f"reject|{msg_id}|{user.id}|{qty}|{pickup_time}")
+        ]])
         await context.bot.send_message(
             seller_id,
             f"📨 <b>Claim Request</b>\n\n"
@@ -414,7 +384,6 @@ async def private_message(update, context):
         )
         await update.message.reply_text("📨 Request sent to the seller for approval.")
         context.user_data.clear()
-
 
 # ========= APPROVE / REJECT HANDLER =========
 async def handle_claim_decision(update, context):
@@ -455,7 +424,6 @@ async def handle_claim_decision(update, context):
         )
         await q.edit_message_text(f"❌ Rejected claim for @{buyer.username or buyer.first_name}.")
 
-
 # ========= SUGGEST NEW DATE/TIME FLOW =========
 async def suggest_time(update, context):
     q = update.callback_query
@@ -464,7 +432,6 @@ async def suggest_time(update, context):
     context.user_data["suggest_info"] = (int(msg_id), int(uid), int(qty))
     await q.message.reply_text("📅 Please choose a new pickup date:", reply_markup=make_month_calendar())
     return SUGGEST
-
 
 async def handle_suggest_calendar(update, context):
     q = update.callback_query
@@ -481,7 +448,6 @@ async def handle_suggest_calendar(update, context):
         await q.message.reply_text("⏰ Please type the exact pickup time (e.g. 14:30):")
         return SUGGEST
 
-
 async def handle_suggest_time_text(update, context):
     user_time = update.message.text.strip()
     msg_id, uid, qty = context.user_data["suggest_info"]
@@ -489,10 +455,10 @@ async def handle_suggest_time_text(update, context):
     l = LISTINGS[msg_id]
     proposed_time = f"{new_date}, {user_time}"
 
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Accept", callback_data=f"accept_newtime|{msg_id}|{qty}|{proposed_time}"),
-         InlineKeyboardButton("❌ Decline", callback_data=f"decline_newtime|{msg_id}")]
-    ])
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Accept", callback_data=f"accept_newtime|{msg_id}|{qty}|{proposed_time}"),
+        InlineKeyboardButton("❌ Decline", callback_data=f"decline_newtime|{msg_id}")
+    ]])
     msg = (
         "📌 <b>IMPORTANT – SAVE THIS MESSAGE</b>\n\n"
         "🕓 <b>Seller proposed new pickup:</b>\n"
@@ -505,7 +471,6 @@ async def handle_suggest_time_text(update, context):
     await update.message.reply_text("✅ Sent your proposed new date/time to the buyer.")
     context.user_data.clear()
     return ConversationHandler.END
-
 
 async def handle_newtime_reply(update, context):
     q = update.callback_query
@@ -532,7 +497,6 @@ async def handle_newtime_reply(update, context):
     elif action == "decline_newtime":
         await context.bot.send_message(l["poster_id"], f"❌ Buyer @{buyer.username or buyer.first_name} declined your new timing.")
         await q.edit_message_text("❌ You declined the new timing. Claim cancelled.")
-
 
 # ========= HANDLER CONFIG =========
 conv_handler = ConversationHandler(
@@ -566,10 +530,7 @@ suggest_conv = ConversationHandler(
     fallbacks=[CommandHandler("cancel", cancel_post)],
 )
 
-
 # ========= APP SETUP =========
-load_listings()
-
 app = Application.builder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("instructions", instructions))
@@ -589,7 +550,7 @@ async def set_commands(app):
     ])
 app.post_init = set_commands
 
-print("🤖 Bot running with persistence + live counter + auto-archive notifications ...")
+print("🤖 Bot running with Firebase persistence + keep-alive + auto-archive ...")
 if __name__ == "__main__":
     keep_alive()
     app.run_polling()
