@@ -24,10 +24,27 @@ import firebase_admin
 from firebase_admin import credentials, db
 
 # ========= FIREBASE SETUP =========
-cred = credentials.Certificate("serviceAccountKey.json")
+# ========= FIREBASE SETUP (ENVIRONMENT VARIABLE) =========
+import json
+from firebase_admin import credentials, db
+
+# Load Firebase credentials from environment variable instead of file
+firebase_creds = json.loads(os.getenv("FIREBASE_CREDENTIALS"))
+cred = credentials.Certificate(firebase_creds)
 firebase_admin.initialize_app(cred, {
     "databaseURL": "https://cgh-telebot-default-rtdb.asia-southeast1.firebasedatabase.app"
 })
+
+ref = db.reference("listings")
+LISTINGS = ref.get() or {}
+
+def save_listings():
+    try:
+        ref.set(LISTINGS)
+        print(f"💾 Saved {len(LISTINGS)} listings to Firebase.")
+    except Exception as e:
+        print(f"⚠️ Failed to save listings: {e}")
+
 
 ref = db.reference("listings")
 
