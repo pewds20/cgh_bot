@@ -32,7 +32,7 @@ from firebase_admin import credentials, db
 firebase_creds = json.loads(os.getenv("FIREBASE_CREDENTIALS"))
 cred = credentials.Certificate(firebase_creds)
 firebase_admin.initialize_app(cred, {
-    "databaseURL": "firebase-adminsdk-fbsvc@cgh-telebot.iam.gserviceaccount.com"
+    "databaseURL": "https://cgh-telebot-default-rtdb.asia-southeast1.firebasedatabase.app/"
 })
 
 ref = db.reference("listings")
