@@ -218,7 +218,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📦 Donate Items", callback_data="help_newitem"),
+            InlineKeyboardButton("📦 Donate Items", url=f"https://t.me/{context.bot.username}?start=newitem"),
             InlineKeyboardButton("📣 Access Channel", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")
         ],
         [InlineKeyboardButton("❓ Instructions", callback_data="help_info")]
@@ -263,6 +263,14 @@ async def newitem(update, context):
     else:
         await update.message.reply_text("🧾 What item are you donating?")
     return ITEM
+
+async def start_newitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if args and args[0].lower() == "newitem":
+        # Begin the donate flow from a deep-link like /start newitem
+        await update.message.reply_text("🧾 What item are you donating?")
+        return ITEM
+    return ConversationHandler.END
 
 async def ask_qty(update, context):
     context.user_data["item"] = update.message.text
@@ -535,7 +543,8 @@ async def handle_newtime_reply(update, context):
 conv_handler = ConversationHandler(
     entry_points=[
         CommandHandler("newitem", newitem),
-        CallbackQueryHandler(newitem, pattern="^help_newitem$")
+        CallbackQueryHandler(newitem, pattern="^help_newitem$"),
+        CommandHandler("start", start_newitem, filters=filters.Regex(r"^/start(?:@\\w+)?\\s+newitem(\b|$)"))
     ],
     states={
         ITEM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_qty)],
@@ -568,11 +577,11 @@ suggest_conv = ConversationHandler(
 
 # ========= APP SETUP =========
 app = Application.builder().token(BOT_TOKEN).build()
+app.add_handler(conv_handler)
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("channel", channel))
 app.add_handler(CommandHandler("instructions", instructions))
 app.add_handler(CallbackQueryHandler(instructions, pattern="^help_info$"))
-app.add_handler(conv_handler)
 app.add_handler(suggest_conv)
 app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, private_message))
 app.add_handler(CallbackQueryHandler(handle_newtime_reply, pattern="^(accept_newtime|decline_newtime)"))
