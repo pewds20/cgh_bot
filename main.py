@@ -217,10 +217,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📦 Donate Items", url=f"https://t.me/{context.bot.username}?start=newitem"),
-            InlineKeyboardButton("📣 Access Channel", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")
-        ],
+        [InlineKeyboardButton("📣 Access Channel", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")],
         [InlineKeyboardButton("❓ Instructions", callback_data="help_info")]
     ])
     msg = (
