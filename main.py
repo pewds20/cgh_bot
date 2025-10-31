@@ -233,7 +233,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="HTML")
 
 async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
+    if update.callback_query:
+        q = update.callback_query
+        await q.answer()
+        target = q.message
+    else:
+        target = update.message
+    await target.reply_text(
         "ℹ️ <b>How It Works</b>\n\n"
         "• Staff post excess items using /newitem.\n"
         "• Items appear in the Redistribution Channel.\n"
@@ -245,7 +251,12 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========= NEW ITEM FLOW =========
 async def newitem(update, context):
-    await update.message.reply_text("🧾 What item are you donating?")
+    if update.callback_query:
+        q = update.callback_query
+        await q.answer()
+        await q.message.reply_text("🧾 What item are you donating?")
+    else:
+        await update.message.reply_text("🧾 What item are you donating?")
     return ITEM
 
 async def ask_qty(update, context):
@@ -517,7 +528,10 @@ async def handle_newtime_reply(update, context):
 
 # ========= HANDLER CONFIG =========
 conv_handler = ConversationHandler(
-    entry_points=[CommandHandler("newitem", newitem)],
+    entry_points=[
+        CommandHandler("newitem", newitem),
+        CallbackQueryHandler(newitem, pattern="^help_newitem$")
+    ],
     states={
         ITEM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_qty)],
         QTY: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_size)],
@@ -551,6 +565,7 @@ suggest_conv = ConversationHandler(
 app = Application.builder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("instructions", instructions))
+app.add_handler(CallbackQueryHandler(instructions, pattern="^help_info$"))
 app.add_handler(conv_handler)
 app.add_handler(suggest_conv)
 app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, private_message))
