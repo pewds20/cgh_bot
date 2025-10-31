@@ -219,7 +219,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📦 Donate Items", callback_data="help_newitem"),
-            InlineKeyboardButton("🤝 Claim Items", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")
+            InlineKeyboardButton("📣 Access Channel", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")
         ],
         [InlineKeyboardButton("❓ Instructions", callback_data="help_info")]
     ])
@@ -228,9 +228,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "This bot helps hospital staff donate and claim excess consumables easily.\n\n"
         "Choose an option below or use these commands:\n"
         "• /newitem – Donate items\n"
-        "• /instructions – Learn how it works"
+        "• /instructions – Learn how it works\n"
+        "• /channel – Open the redistribution channel"
     )
     await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="HTML")
+
+async def channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📣 Open Channel", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")]])
+    await update.message.reply_text("Open the redistribution channel:", reply_markup=keyboard)
 
 async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.callback_query:
@@ -564,6 +569,7 @@ suggest_conv = ConversationHandler(
 # ========= APP SETUP =========
 app = Application.builder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("channel", channel))
 app.add_handler(CommandHandler("instructions", instructions))
 app.add_handler(CallbackQueryHandler(instructions, pattern="^help_info$"))
 app.add_handler(conv_handler)
