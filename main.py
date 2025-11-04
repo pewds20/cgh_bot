@@ -220,8 +220,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = (
         "👋 <b>Welcome to the Sustainability Redistribution Bot!</b>\n\n"
         "This bot helps hospital staff donate excess consumables easily.\n\n"
-        "Use the command below to get started:\n"
-        "• /newitem – Donate items"
+        "Use the commands below to get started:\n"
+        "• /newitem – Donate items\n"
+        "• /instructions – Learn how it works\n"
+        "• /channel – Open the redistribution channel"
     )
     sent = await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="HTML")
     context.chat_data["menu_msg_id"] = sent.message_id
