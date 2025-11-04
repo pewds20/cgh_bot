@@ -222,13 +222,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     msg = (
         "👋 <b>Welcome to the Sustainability Redistribution Bot!</b>\n\n"
-        "This bot helps hospital staff donate and claim excess consumables easily.\n\n"
+        "This bot helps hospital staff donate excess consumables easily.\n\n"
         "Choose an option below or use these commands:\n"
         "• /newitem – Donate items\n"
         "• /instructions – Learn how it works\n"
         "• /channel – Open the redistribution channel"
     )
-    await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="HTML")
+    # Try to remove keyboard from previous start menu message
+    try:
+        prev_id = context.chat_data.get("menu_msg_id")
+        if prev_id:
+            await context.bot.edit_message_reply_markup(chat_id=update.effective_chat.id, message_id=prev_id, reply_markup=None)
+    except Exception:
+        pass
+    sent = await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="HTML")
+    context.chat_data["menu_msg_id"] = sent.message_id
 
 async def channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📣 Open Channel", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")]])
@@ -260,6 +268,14 @@ async def newitem(update, context):
     else:
         await update.message.reply_text("🧾 What item are you donating?")
     return ITEM
+
+async def deprecate_old_donate_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer("This button is no longer used. Please use /newitem or /start.", show_alert=False)
+    try:
+        await q.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
 async def start_newitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
@@ -540,7 +556,6 @@ async def handle_newtime_reply(update, context):
 conv_handler = ConversationHandler(
     entry_points=[
         CommandHandler("newitem", newitem),
-        CallbackQueryHandler(newitem, pattern="^help_newitem$"),
         CommandHandler("start", start_newitem, filters=filters.Regex(r"^/start(?:@\\w+)?\\s+newitem(\b|$)"))
     ],
     states={
@@ -576,6 +591,7 @@ suggest_conv = ConversationHandler(
 app = Application.builder().token(BOT_TOKEN).build()
 app.add_handler(conv_handler)
 app.add_handler(CommandHandler("start", start))
+app.add_handler(CallbackQueryHandler(deprecate_old_donate_button, pattern="^help_newitem$"))
 app.add_handler(CommandHandler("channel", channel))
 app.add_handler(CommandHandler("instructions", instructions))
 app.add_handler(CallbackQueryHandler(instructions, pattern="^help_info$"))
