@@ -230,9 +230,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 <b>Welcome to the Sustainability Redistribution Bot!</b>\n\n"
         "This bot helps hospital staff donate excess consumables easily.\n\n"
         "Use the commands below to get started:\n"
-        f"• <a href=\"https://t.me/{context.bot.username}?start=newitem\">/newitem</a> – Donate items\n"
-        f"• <a href=\"https://t.me/{context.bot.username}?start=instructions\">/instructions</a> – Learn how it works\n"
-        f"• <a href=\"https://t.me/{CHANNEL_ID.lstrip('@')}\">/channel</a> – Open the redistribution channel"
+        "• /newitem – Donate items\n"
+        "• /instructions – Learn how it works\n"
+        "• /channel – Open the redistribution channel"
     )
     sent = await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="HTML")
     context.chat_data["menu_msg_id"] = sent.message_id
@@ -254,8 +254,7 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Items appear in the Redistribution Channel.\n"
         "• Others click Claim and coordinate pickup.\n"
         "• Seller can approve, reject, or suggest new pickup times.\n\n"
-        f"This ensures efficient reuse and minimizes hospital waste ♻️\n\n"
-        f"<b>Quick start:</b> <a href=\"https://t.me/{context.bot.username}?start=newitem\">Start donating</a> (opens a chat with the bot)",
+        "This ensures efficient reuse and minimizes hospital waste ♻️",
         parse_mode="HTML"
     )
 
