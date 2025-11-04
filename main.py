@@ -216,25 +216,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📣 Access Channel", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")],
-        [InlineKeyboardButton("❓ Instructions", callback_data="help_info")]
-    ])
+    keyboard = None
     msg = (
         "👋 <b>Welcome to the Sustainability Redistribution Bot!</b>\n\n"
         "This bot helps hospital staff donate excess consumables easily.\n\n"
-        "Choose an option below or use these commands:\n"
-        "• /newitem – Donate items\n"
-        "• /instructions – Learn how it works\n"
-        "• /channel – Open the redistribution channel"
+        "Use the command below to get started:\n"
+        "• /newitem – Donate items"
     )
-    # Try to remove keyboard from previous start menu message
-    try:
-        prev_id = context.chat_data.get("menu_msg_id")
-        if prev_id:
-            await context.bot.edit_message_reply_markup(chat_id=update.effective_chat.id, message_id=prev_id, reply_markup=None)
-    except Exception:
-        pass
     sent = await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="HTML")
     context.chat_data["menu_msg_id"] = sent.message_id
 
@@ -297,8 +285,34 @@ async def ask_size(update, context):
 
 async def ask_expiry(update, context):
     context.user_data["size"] = update.message.text
-    await update.message.reply_text("⏰ Please choose the expiry date:", reply_markup=make_month_calendar())
+    await update.message.reply_text(
+        "⏰ Enter the expiry date in DD/MM/YY format, or type 'NA' if not applicable.\n"
+        "Examples: 05/11/25, 15/01/26, NA"
+    )
     return EXPIRY
+
+def _parse_expiry_text(text: str) -> str:
+    t = text.strip()
+    if t.upper() == "NA":
+        return "NA"
+    # Try DD/MM/YY then DD/MM/YYYY
+    for fmt in ("%d/%m/%y", "%d/%m/%Y"):
+        try:
+            dt = datetime.datetime.strptime(t, fmt).date()
+            return dt.strftime("%d/%m/%y")
+        except Exception:
+            continue
+    raise ValueError("Invalid date")
+
+async def handle_expiry_text(update, context):
+    try:
+        parsed = _parse_expiry_text(update.message.text)
+    except ValueError:
+        await update.message.reply_text("⚠️ Please enter a valid date as DD/MM/YY (e.g., 05/11/25) or 'NA'.")
+        return EXPIRY
+    context.user_data["expiry"] = parsed
+    await update.message.reply_text("📍 Where is the pickup location?")
+    return LOCATION
 
 async def calendar_handler(update, context):
     q = update.callback_query
@@ -562,7 +576,7 @@ conv_handler = ConversationHandler(
         ITEM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_qty)],
         QTY: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_size)],
         SIZE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_expiry)],
-        EXPIRY: [CallbackQueryHandler(calendar_handler, pattern="^(date_|nav_|noop)")],
+        EXPIRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_expiry_text)],
         LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_photo)],
         PHOTO: [
             MessageHandler(filters.PHOTO, save_photo),
