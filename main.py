@@ -255,6 +255,7 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Others click Claim and coordinate pickup.\n"
         "• Seller can approve, reject, or suggest new pickup times.\n\n"
         "This ensures efficient reuse and minimizes hospital waste ♻️",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Start /newitem", url=f"https://t.me/{context.bot.username}?start=newitem")]]),
         parse_mode="HTML"
     )
 
