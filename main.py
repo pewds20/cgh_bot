@@ -79,41 +79,7 @@ CHANNEL_ID = os.getenv("CHANNEL_ID", "@Sustainability_Redistribution")
 
 ITEM, QTY, SIZE, EXPIRY, LOCATION, PHOTO, CONFIRM, SUGGEST = range(8)
 
-# ========= CALENDAR =========
-def make_month_calendar(year=None, month=None):
-    today = datetime.date.today()
-    if year is None:
-        year = today.year
-    if month is None:
-        month = today.month
-    month_name = datetime.date(year, month, 1).strftime("%B %Y")
-    cal = calendar.Calendar()
-    days = [d for d in cal.itermonthdates(year, month)]
-
-    rows, row = [], []
-    for day in days:
-        if day.month == month:
-            row.append(InlineKeyboardButton(str(day.day), callback_data=f"date_{day.isoformat()}"))
-        else:
-            row.append(InlineKeyboardButton(" ", callback_data="noop"))
-        if len(row) == 7:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-
-    prev_month = 12 if month == 1 else month - 1
-    next_month = 1 if month == 12 else month + 1
-    prev_year = year - 1 if month == 1 else year
-    next_year = year + 1 if month == 12 else year
-
-    nav = [
-        InlineKeyboardButton("<<", callback_data=f"nav_{prev_year}_{prev_month}"),
-        InlineKeyboardButton(month_name, callback_data="noop"),
-        InlineKeyboardButton(">>", callback_data=f"nav_{next_year}_{next_month}")
-    ]
-    rows.insert(0, nav)
-    return InlineKeyboardMarkup(rows)
+# Calendar functionality removed - using text input instead
 
 # ========= UPDATE CHANNEL POST =========
 async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
@@ -481,7 +447,11 @@ async def suggest_time(update, context):
     msg_id = int(q.data.split("_")[1])
     context.user_data["suggesting_for"] = msg_id
     await q.edit_message_text(
-        "📅 Please suggest a new date and time (e.g., '25/12/2023 14:30' or 'Tomorrow 3pm'):"
+        "📅 Please enter a new date and time in this format:\n\n"
+        "• 25/12/2023 14:30\n"
+        "• Tomorrow 3pm\n"
+        "• Next Monday 10am\n\n"
+        "The buyer will receive your suggested time and can accept or decline it."
     )
     return SUGGEST
 
@@ -490,15 +460,9 @@ async def handle_suggest_time_text(update, context):
     msg_id = context.user_data["suggesting_for"]
     l = LISTINGS[msg_id]
     
-    # Get the claim info from the listing
-    claim = next((c for c in l.get("claims", []) if c["user_id"] == update.effective_user.id), None)
-    if not claim:
-        await update.message.reply_text("❌ Could not find your claim. Please try claiming again.")
-        return ConversationHandler.END
-    
-    qty = claim["qty"]
-    buyer_id = claim["user_id"]
-    
+    # Store the suggested time for later use
+    context.user_data["proposed_time"] = proposed_time
+
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Accept", callback_data=f"accept_newtime|{msg_id}|{qty}|{proposed_time}"),
         InlineKeyboardButton("❌ Decline", callback_data=f"decline_newtime|{msg_id}")
@@ -506,19 +470,13 @@ async def handle_suggest_time_text(update, context):
     msg = (
         "📌 <b>IMPORTANT – SAVE THIS MESSAGE</b>\n\n"
         "🕓 <b>Seller proposed new pickup:</b>\n"
-        f"📦 Item: <b>{l['item']}</b>\n"
         f"📦 Quantity: <b>{qty}</b>\n"
         f"📅 Pickup: <b>{proposed_time}</b>\n"
         f"📍 Location: <b>{l['location']}</b>\n\n"
         "Do you accept this proposal?"
     )
-    
-    try:
-        await context.bot.send_message(buyer_id, msg, reply_markup=kb, parse_mode="HTML")
-        await update.message.reply_text("✅ Sent your proposed new date/time to the buyer.")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Failed to send message to buyer: {str(e)}")
-    
+    await context.bot.send_message(uid, msg, reply_markup=kb, parse_mode="HTML")
+    await update.message.reply_text("✅ Sent your proposed new date/time to the buyer.")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -541,7 +499,7 @@ async def handle_newtime_reply(update, context):
         await update_channel_post(context, msg_id)
         await context.bot.send_message(
             l["poster_id"],
-            f"✅ Buyer @{buyer.username or buyer.first_name} accepted your new pickup timing:\n{proposed_time} ({qty} boxes)."
+            f"✅ Buy.er @{buyer.username or buyer.first_name} accepted your new pickup timing:\n{proposed_time} ({qty} boxes)."
         )
         await q.edit_message_text(f"✅ Pickup confirmed for {qty} of {l['item']} at {proposed_time}.")
     elif action == "decline_newtime":
@@ -576,7 +534,6 @@ suggest_conv = ConversationHandler(
     entry_points=[CallbackQueryHandler(suggest_time, pattern="^suggest")],
     states={
         SUGGEST: [
-            CallbackQueryHandler(handle_suggest_calendar, pattern="^(date_|nav_|noop)"),
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggest_time_text)
         ]
     },
