@@ -572,7 +572,7 @@ async def handle_newtime_reply(update, context):
         await update_channel_post(context, msg_id)
         await context.bot.send_message(
             l["poster_id"],
-            f"✅ Buy.er @{buyer.username or buyer.first_name} accepted your new pickup timing:\n{proposed_time} ({qty} boxes)."
+            f"✅ Buyer @{buyer.username or buyer.first_name} accepted your new pickup timing:\n{proposed_time} ({qty} boxes)."
         )
         await q.edit_message_text(f"✅ Pickup confirmed for {qty} of {l['item']} at {proposed_time}.")
     elif action == "decline_newtime":
