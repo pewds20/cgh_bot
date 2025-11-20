@@ -444,24 +444,88 @@ async def handle_claim_decision(update, context):
 async def suggest_time(update, context):
     q = update.callback_query
     await q.answer()
-    msg_id = int(q.data.split("_")[1])
-    context.user_data["suggesting_for"] = msg_id
-    await q.edit_message_text(
-        "📅 Please enter a new date and time in this format:\n\n"
-        "• 25/12/2023 14:30\n"
-        "• Tomorrow 3pm\n"
-        "• Next Monday 10am\n\n"
-        "The buyer will receive your suggested time and can accept or decline it."
-    )
-    return SUGGEST
+    
+    # Parse the callback data: suggest|{msg_id}|{user_id}|{qty}
+    parts = q.data.split('|')
+    if len(parts) >= 2:
+        msg_id = int(parts[1])
+        context.user_data["suggesting_for"] = msg_id
+        
+        # Store the claim info for later use
+        if len(parts) >= 4:
+            context.user_data["claim_info"] = {
+                "buyer_id": int(parts[2]),
+                "qty": int(parts[3])
+            }
+            
+        await q.edit_message_text(
+            "📅 <b>Suggest a new pickup time:</b>\n\n"
+            "Please enter a new date and time in one of these formats:\n\n"
+            "• <code>25/12/2023 14:30</code>\n"
+            "• <code>Tomorrow 3pm</code>\n"
+            "• <code>Next Monday 10am</code>\n\n"
+            "The buyer will receive your suggested time and can accept or decline it.",
+            parse_mode="HTML"
+        )
+        return SUGGEST
+    
+    await q.edit_message_text("❌ Error: Could not process your request. Please try again.")
+    return ConversationHandler.END
 
 async def handle_suggest_time_text(update, context):
     proposed_time = update.message.text.strip()
-    msg_id = context.user_data["suggesting_for"]
-    l = LISTINGS[msg_id]
+    msg_id = context.user_data.get("suggesting_for")
+    claim_info = context.user_data.get("claim_info", {})
     
-    # Store the suggested time for later use
-    context.user_data["proposed_time"] = proposed_time
+    if not msg_id or not claim_info or msg_id not in LISTINGS:
+        await update.message.reply_text("❌ Error: Could not process your request. Please try claiming the item again.")
+        context.user_data.clear()
+        return ConversationHandler.END
+        
+    l = LISTINGS[msg_id]
+    buyer_id = claim_info.get("buyer_id")
+    qty = claim_info.get("qty", 1)
+    
+    # Create the message with accept/decline buttons
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Accept", callback_data=f"accept_newtime|{msg_id}|{qty}|{proposed_time}"),
+            InlineKeyboardButton("❌ Decline", callback_data=f"decline_newtime|{msg_id}")
+        ]
+    ])
+    
+    # Format the message to the buyer
+    msg = (
+        "📌 <b>NEW PICKUP TIME SUGGESTED</b>\n\n"
+        f"🛍️ <b>Item:</b> {l['item']}\n"
+        f"📦 <b>Quantity:</b> {qty}\n"
+        f"📅 <b>Proposed Pickup Time:</b> {proposed_time}\n"
+        f"📍 <b>Location:</b> {l['location']}\n\n"
+        "Please accept or decline this new pickup time:"
+    )
+    
+    try:
+        # Send the suggestion to the buyer
+        await context.bot.send_message(
+            chat_id=buyer_id,
+            text=msg,
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+        
+        # Confirm to the seller
+        await update.message.reply_text(
+            "✅ Your suggested pickup time has been sent to the buyer. "
+            "They will be able to accept or decline it."
+        )
+        
+    except Exception as e:
+        await update.message.reply_text(
+            "❌ Failed to send the suggestion. Please try again later."
+        )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
 
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Accept", callback_data=f"accept_newtime|{msg_id}|{qty}|{proposed_time}"),
