@@ -177,7 +177,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["claim_step"] = "qty"
         await update.message.reply_text(
             f"You're claiming <b>{l['item']}</b>.\n\n"
-            "📦 How many boxes would you like to collect?",
+            "📦 How many units of the item would you like to collect?",
             parse_mode="HTML"
         )
         return
