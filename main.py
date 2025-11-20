@@ -220,20 +220,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args and context.args[0].lower() == "newitem":
         return await newitem(update, context)
     
-    # Show main menu
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ New Item", callback_data="newitem")],
-        [InlineKeyboardButton("❓ How It Works", callback_data="help_info")],
-        [InlineKeyboardButton("📢 View Channel", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")]
-    ])
-    
     msg = (
         "👋 <b>Welcome to the Sustainability Redistribution Bot!</b>\n\n"
         "This bot helps hospital staff donate excess consumables easily.\n\n"
-        "What would you like to do?"
+        "<b>Available Commands:</b>\n"
+        "/newitem - Donate excess items\n"
+        "/instructions - Learn how it works"
     )
     
-    await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="HTML")
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 async def channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📣 Open Channel", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")]])
@@ -246,16 +241,15 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = q.message
     else:
         target = update.message
-    await target.reply_text(
+    msg = (
         "ℹ️ <b>How It Works</b>\n\n"
-        "• Staff post excess items using /newitem.\n"
-        "• Items appear in the Redistribution Channel.\n"
-        "• Others click Claim and coordinate pickup.\n"
-        "• Seller can approve, reject, or suggest new pickup times.\n\n"
-        "This ensures efficient reuse and minimizes hospital waste ♻️",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Start /newitem", url=f"https://t.me/{context.bot.username}?start=newitem")]]),
-        parse_mode="HTML"
+        "1. Use /newitem to post excess items.\n"
+        "2. Your item will appear in the Redistribution Channel.\n"
+        "3. Others can claim and coordinate pickup.\n"
+        "4. You'll be notified when someone claims your item.\n\n"
+        "To get started, just type: /newitem"
     )
+    await target.reply_text(msg, parse_mode="HTML")
 
 # ========= NEW ITEM FLOW =========
 async def newitem(update, context):
