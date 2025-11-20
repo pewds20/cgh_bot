@@ -197,9 +197,9 @@ async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========= BASIC COMMANDS =========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    if args and args[0].startswith("claim_"):
-        msg_id = int(args[0].split("_")[1])
+    # Handle deep link for claims
+    if context.args and context.args[0].startswith("claim_"):
+        msg_id = int(context.args[0].split("_")[1])
         l = LISTINGS.get(msg_id)
         if not l:
             await update.message.reply_text("❌ This listing is no longer available.")
@@ -210,32 +210,30 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["claiming_msg_id"] = msg_id
         context.user_data["claim_step"] = "qty"
         await update.message.reply_text(
-            f"You’re claiming <b>{l['item']}</b>.\n\n"
+            f"You're claiming <b>{l['item']}</b>.\n\n"
             "📦 How many boxes would you like to collect?",
             parse_mode="HTML"
         )
         return
-
-    # Handle deep-link payloads for quick actions
-    if args:
-        if args[0].lower() == "instructions":
-            await instructions(update, context)
-            return
-        if args[0].lower() == "channel":
-            await channel(update, context)
-            return
-
-    keyboard = None
+    
+    # Handle /start newitem
+    if context.args and context.args[0].lower() == "newitem":
+        return await newitem(update, context)
+    
+    # Show main menu
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ New Item", callback_data="newitem")],
+        [InlineKeyboardButton("❓ How It Works", callback_data="help_info")],
+        [InlineKeyboardButton("📢 View Channel", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")]
+    ])
+    
     msg = (
         "👋 <b>Welcome to the Sustainability Redistribution Bot!</b>\n\n"
         "This bot helps hospital staff donate excess consumables easily.\n\n"
-        "Use the commands below to get started:\n"
-        "• /newitem – Donate items\n"
-        "• /instructions – Learn how it works\n"
-        "• /channel – Open the redistribution channel"
+        "What would you like to do?"
     )
-    sent = await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="HTML")
-    context.chat_data["menu_msg_id"] = sent.message_id
+    
+    await update.message.reply_text(msg, reply_markup=keyboard, parse_mode="HTML")
 
 async def channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📣 Open Channel", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")]])
@@ -278,12 +276,8 @@ async def deprecate_old_donate_button(update: Update, context: ContextTypes.DEFA
         pass
 
 async def start_newitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    if args and args[0].lower() == "newitem":
-        # Begin the donate flow from a deep-link like /start newitem
-        await update.message.reply_text("🧾 What item are you donating?")
-        return ITEM
-    return ConversationHandler.END
+    # This function is no longer needed as we handle the newitem flow in the start function
+    return await newitem(update, context)
 
 async def ask_qty(update, context):
     context.user_data["item"] = update.message.text
@@ -582,7 +576,7 @@ async def handle_newtime_reply(update, context):
 conv_handler = ConversationHandler(
     entry_points=[
         CommandHandler("newitem", newitem),
-        CommandHandler("start", start_newitem, filters=filters.Regex(r"^/start(?:@\\w+)?\\s+newitem(\b|$)"))
+        CommandHandler("start", start, filters=filters.Regex(r"newitem"))
     ],
     states={
         ITEM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_qty)],
@@ -615,8 +609,10 @@ suggest_conv = ConversationHandler(
 
 # ========= APP SETUP =========
 app = Application.builder().token(BOT_TOKEN).build()
-app.add_handler(conv_handler)
+# Add start handler first to handle /start without newitem
 app.add_handler(CommandHandler("start", start))
+# Then add conversation handler
+app.add_handler(conv_handler)
 app.add_handler(CallbackQueryHandler(deprecate_old_donate_button, pattern="^help_newitem$"))
 app.add_handler(CommandHandler("channel", channel))
 app.add_handler(CommandHandler("instructions", instructions))
