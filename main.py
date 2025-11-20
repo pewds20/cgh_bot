@@ -75,7 +75,7 @@ def keep_alive():
 
 # ========= CONFIG =========
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8377427445:AAE-H_EiGAjs4NKE20v9S8zFLOv2AiHKcpU")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@sustainability_redistribution")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@Sustainability_Redistribution")
 
 ITEM, QTY, SIZE, EXPIRY, LOCATION, PHOTO, CONFIRM, SUGGEST = range(8)
 
