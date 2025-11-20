@@ -314,24 +314,6 @@ async def handle_expiry_text(update, context):
     await update.message.reply_text("📍 Where is the pickup location?")
     return LOCATION
 
-async def calendar_handler(update, context):
-    q = update.callback_query
-    await q.answer()
-    data = q.data
-    if data.startswith("nav_"):
-        _, y, m = data.split("_")
-        await q.edit_message_reply_markup(reply_markup=make_month_calendar(int(y), int(m)))
-        return EXPIRY
-    elif data.startswith("date_"):
-        picked = data.replace("date_", "")
-        context.user_data["expiry"] = datetime.date.fromisoformat(picked).strftime("%d/%m/%y")
-        await q.edit_message_text(f"✅ Expiry date: {context.user_data['expiry']}")
-        await q.message.reply_text("📍 Where is the pickup location?")
-        return LOCATION
-    elif data == "noop":
-        await q.answer("Select a valid day.")
-        return EXPIRY
-
 async def ask_photo(update, context):
     context.user_data["location"] = update.message.text
     await update.message.reply_text("📸 Send a photo of the item or type 'Skip' if none.")
@@ -496,33 +478,27 @@ async def handle_claim_decision(update, context):
 async def suggest_time(update, context):
     q = update.callback_query
     await q.answer()
-    _, msg_id, uid, qty = q.data.split("|")
-    context.user_data["suggest_info"] = (int(msg_id), int(uid), int(qty))
-    await q.message.reply_text("📅 Please choose a new pickup date:", reply_markup=make_month_calendar())
+    msg_id = int(q.data.split("_")[1])
+    context.user_data["suggesting_for"] = msg_id
+    await q.edit_message_text(
+        "📅 Please suggest a new date and time (e.g., '25/12/2023 14:30' or 'Tomorrow 3pm'):"
+    )
     return SUGGEST
 
-async def handle_suggest_calendar(update, context):
-    q = update.callback_query
-    await q.answer()
-    data = q.data
-    if data.startswith("nav_"):
-        _, y, m = data.split("_")
-        await q.edit_message_reply_markup(reply_markup=make_month_calendar(int(y), int(m)))
-        return SUGGEST
-    elif data.startswith("date_"):
-        picked = data.replace("date_", "")
-        context.user_data["new_date"] = datetime.date.fromisoformat(picked).strftime("%d %b %Y")
-        await q.edit_message_text(f"✅ Date selected: {context.user_data['new_date']}")
-        await q.message.reply_text("⏰ Please type the exact pickup time (e.g. 14:30):")
-        return SUGGEST
-
 async def handle_suggest_time_text(update, context):
-    user_time = update.message.text.strip()
-    msg_id, uid, qty = context.user_data["suggest_info"]
-    new_date = context.user_data["new_date"]
+    proposed_time = update.message.text.strip()
+    msg_id = context.user_data["suggesting_for"]
     l = LISTINGS[msg_id]
-    proposed_time = f"{new_date}, {user_time}"
-
+    
+    # Get the claim info from the listing
+    claim = next((c for c in l.get("claims", []) if c["user_id"] == update.effective_user.id), None)
+    if not claim:
+        await update.message.reply_text("❌ Could not find your claim. Please try claiming again.")
+        return ConversationHandler.END
+    
+    qty = claim["qty"]
+    buyer_id = claim["user_id"]
+    
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Accept", callback_data=f"accept_newtime|{msg_id}|{qty}|{proposed_time}"),
         InlineKeyboardButton("❌ Decline", callback_data=f"decline_newtime|{msg_id}")
@@ -530,13 +506,19 @@ async def handle_suggest_time_text(update, context):
     msg = (
         "📌 <b>IMPORTANT – SAVE THIS MESSAGE</b>\n\n"
         "🕓 <b>Seller proposed new pickup:</b>\n"
+        f"📦 Item: <b>{l['item']}</b>\n"
         f"📦 Quantity: <b>{qty}</b>\n"
         f"📅 Pickup: <b>{proposed_time}</b>\n"
         f"📍 Location: <b>{l['location']}</b>\n\n"
         "Do you accept this proposal?"
     )
-    await context.bot.send_message(uid, msg, reply_markup=kb, parse_mode="HTML")
-    await update.message.reply_text("✅ Sent your proposed new date/time to the buyer.")
+    
+    try:
+        await context.bot.send_message(buyer_id, msg, reply_markup=kb, parse_mode="HTML")
+        await update.message.reply_text("✅ Sent your proposed new date/time to the buyer.")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Failed to send message to buyer: {str(e)}")
+    
     context.user_data.clear()
     return ConversationHandler.END
 
