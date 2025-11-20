@@ -191,7 +191,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "This bot helps hospital staff donate excess consumables easily.\n\n"
         "<b>Available Commands:</b>\n"
         "/newitem - Donate excess items\n"
-        "/instructions - Learn how it works"
+        "/instructions - Learn how it works\n\n"
+        "<i>⚠️ <b>Note:</b> If you encounter any issues with the bot, "
+        "please contact the admin or post directly in the channel. "
+        "In case of technical difficulties, manual coordination "
+        "through the channel may be necessary.</i>"
     )
     
     await update.message.reply_text(msg, parse_mode="HTML")
@@ -213,6 +217,11 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "2. Your item will appear in the Redistribution Channel.\n"
         "3. Others can claim and coordinate pickup.\n"
         "4. You'll be notified when someone claims your item.\n\n"
+        "<b>Important Notes:</b>\n"
+        "• The bot may experience occasional technical difficulties\n"
+        "• If the bot is unresponsive, please post directly in the channel\n"
+        "• Manual coordination may be needed if automated features fail\n"
+        "• Always double-check pickup details with the other party\n\n"
         "To get started, just type: /newitem"
     )
     await target.reply_text(msg, parse_mode="HTML")
