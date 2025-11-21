@@ -499,27 +499,54 @@ async def private_message(update, context):
     user = update.effective_user
 
     if step == "qty":
-        context.user_data["claim_qty"] = int(update.message.text)
-        context.user_data["claim_step"] = "time"
-        await update.message.reply_text("🕓 When can you collect? (e.g. 10 Oct 2025, 3–5 pm)")
+        try:
+            qty = int(update.message.text)
+            if qty <= 0:
+                await update.message.reply_text("❌ Please enter a valid quantity greater than 0.")
+                return
+            if qty > l["remaining"]:
+                await update.message.reply_text(f"❌ Only {l['remaining']} units available. Please enter a smaller quantity.")
+                return
+                
+            context.user_data["claim_qty"] = qty
+            context.user_data["claim_step"] = "time"
+            await update.message.reply_text("🕓 When can you collect? (e.g., 'Tomorrow 2-4pm' or 'Friday after 6pm')")
+        except ValueError:
+            await update.message.reply_text("❌ Please enter a valid number.")
+            
     elif step == "time":
         pickup_time = update.message.text
         qty = context.user_data["claim_qty"]
         seller_id = l["poster_id"]
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Approve", callback_data=f"approve|{msg_id}|{user.id}|{qty}|{pickup_time}"),
-            InlineKeyboardButton("🕓 Suggest New Date/Time", callback_data=f"suggest|{msg_id}|{user.id}|{qty}"),
+            InlineKeyboardButton("🕓 Suggest New Time", callback_data=f"suggest|{msg_id}|{user.id}|{qty}"),
             InlineKeyboardButton("❌ Reject", callback_data=f"reject|{msg_id}|{user.id}|{qty}|{pickup_time}")
         ]])
+        
+        # Send to seller
         await context.bot.send_message(
             seller_id,
-            f"📨 <b>Claim Request</b>\n\n"
+            f"📨 <b>New Claim Request</b>\n\n"
             f"👤 @{user.username or user.first_name} wants to claim:\n"
-            f"• <b>{qty}</b> of <b>{l['item']}</b>\n"
-            f"• Collection: {pickup_time}",
-            reply_markup=kb, parse_mode="HTML"
+            f"• <b>{qty} × {l['item']}</b>\n"
+            f"• Pickup time: {pickup_time}\n"
+            f"• Location: {l['location']}",
+            reply_markup=kb,
+            parse_mode="HTML"
         )
-        await update.message.reply_text("📨 Request sent to the seller for approval.")
+        
+        # Confirm to buyer
+        await update.message.reply_text(
+            "✅ Your claim request has been sent to the seller!\n\n"
+            f"📦 <b>{qty} × {l['item']}</b>\n"
+            f"⏰ Pickup: {pickup_time}\n"
+            f"📍 {l['location']}\n\n"
+            "The seller will review your request and get back to you soon.",
+            parse_mode="HTML"
+        )
+        
+        # Clear user data
         context.user_data.clear()
 
 # ========= APPROVE / REJECT HANDLER =========
