@@ -598,23 +598,57 @@ async def handle_suggest_time_text(update, context):
             "❌ Failed to send the suggestion. Please try again later."
         )
     
-    context.user_data.clear()
-    return ConversationHandler.END
-
-    kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Accept", callback_data=f"accept_newtime|{msg_id}|{qty}|{proposed_time}"),
-        InlineKeyboardButton("❌ Decline", callback_data=f"decline_newtime|{msg_id}")
-    ]])
+    # Get the listing from the message ID
+    msg_id = context.user_data.get("suggesting_for")
+    claim_info = context.user_data.get("claim_info", {})
+    
+    if not msg_id or not claim_info or msg_id not in LISTINGS:
+        await update.message.reply_text("❌ Error: Could not process your request. Please try claiming the item again.")
+        context.user_data.clear()
+        return ConversationHandler.END
+        
+    l = LISTINGS[msg_id]
+    buyer_id = claim_info.get("buyer_id")
+    qty = claim_info.get("qty", 1)
+    
+    # Create the message with accept/decline buttons
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Accept", callback_data=f"accept_newtime|{msg_id}|{qty}|{proposed_time}"),
+            InlineKeyboardButton("❌ Decline", callback_data=f"decline_newtime|{msg_id}")
+        ]
+    ])
+    
+    # Format the message to the buyer
     msg = (
-        "📌 <b>IMPORTANT – SAVE THIS MESSAGE</b>\n\n"
-        "🕓 <b>Seller proposed new pickup:</b>\n"
-        f"📦 Quantity: <b>{qty}</b>\n"
-        f"📅 Pickup: <b>{proposed_time}</b>\n"
-        f"📍 Location: <b>{l['location']}</b>\n\n"
-        "Do you accept this proposal?"
+        "📌 <b>NEW PICKUP TIME SUGGESTED</b>\n\n"
+        f"🛍️ <b>Item:</b> {l['item']}\n"
+        f"📦 <b>Quantity:</b> {qty}\n"
+        f"📅 <b>Proposed Pickup Time:</b> {proposed_time}\n"
+        f"📍 <b>Location:</b> {l['location']}\n\n"
+        "Please accept or decline this new pickup time:"
     )
-    await context.bot.send_message(uid, msg, reply_markup=kb, parse_mode="HTML")
-    await update.message.reply_text("✅ Sent your proposed new date/time to the buyer.")
+    
+    try:
+        # Send the suggestion to the buyer
+        await context.bot.send_message(
+            chat_id=buyer_id,
+            text=msg,
+            reply_markup=kb,
+            parse_mode="HTML"
+        )
+        
+        # Confirm to the seller
+        await update.message.reply_text(
+            "✅ Your suggested pickup time has been sent to the buyer. "
+            "They will be able to accept or decline it."
+        )
+        
+    except Exception as e:
+        await update.message.reply_text(
+            "❌ Failed to send the suggestion. Please try again later."
+        )
+    
     context.user_data.clear()
     return ConversationHandler.END
 
