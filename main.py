@@ -199,48 +199,81 @@ async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Handle deep link for claims
     if context.args and context.args[0].startswith("claim_"):
-        msg_id = int(context.args[0].split("_")[1])
-        # Try to refresh from Firebase first
-        if not refresh_listings() or msg_id not in LISTINGS:
-            # Try to find the original poster's listings
-            user_listings = db.reference("user_listings").get() or {}
-            poster_id = None
+        try:
+            # Get the message ID from the deep link
+            msg_id = context.args[0].split("_")[1]
+            print(f"Start command with claim: {msg_id}")
             
-            # Find which user originally posted this listing
-            for uid, listings in user_listings.items():
-                if str(msg_id) in listings:
-                    poster_id = uid
-                    break
+            # Force refresh listings from Firebase
+            refresh_listings()
             
-            # If the current user is the original poster, offer to repost
-            if str(update.effective_user.id) == poster_id:
-                keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Repost This Item", callback_data=f"repost_{msg_id}")]
-                ])
-                await update.message.reply_text(
-                    "⚠️ This listing is no longer active, but I found it in your history. "
-                    "Would you like to repost it?",
-                    reply_markup=keyboard
-                )
-            else:
-                await update.message.reply_text(
-                    "⚠️ This listing is no longer available. "
-                    "Please ask the original poster to create a new listing."
-                )
+            # Check if the listing exists in our current data
+            if msg_id not in LISTINGS:
+                print(f"Listing {msg_id} not found in LISTINGS, checking user_listings...")
+                # Try to find the listing in user_listings
+                user_listings = db.reference("user_listings").get() or {}
+                found = False
+                
+                # Search through all user listings
+                for uid, listings in user_listings.items():
+                    if msg_id in listings:
+                        # Found the listing, add it back to active listings
+                        LISTINGS[msg_id] = listings[msg_id]
+                        save_listings()
+                        found = True
+                        print(f"Found listing {msg_id} in user_listings, restored to active listings")
+                        break
+                
+                if not found:
+                    print(f"Listing {msg_id} not found anywhere")
+                    # Try to find the original poster
+                    poster_id = None
+                    for uid, listings in user_listings.items():
+                        if msg_id in listings:
+                            poster_id = uid
+                            break
+                    
+                    # If the current user is the original poster, offer to repost
+                    if str(update.effective_user.id) == poster_id:
+                        keyboard = InlineKeyboardMarkup([
+                            [InlineKeyboardButton("🔄 Repost This Item", callback_data=f"repost_{msg_id}")]
+                        ])
+                        await update.message.reply_text(
+                            "⚠️ This listing is no longer active, but I found it in your history. "
+                            "Would you like to repost it?",
+                            reply_markup=keyboard
+                        )
+                    else:
+                        await update.message.reply_text(
+                            "⚠️ This listing is no longer available. "
+                            "Please ask the original poster to create a new listing."
+                        )
+                    return
+            
+            # Now get the listing
+            l = LISTINGS[msg_id]
+            
+            if l.get("remaining", 0) <= 0:
+                await update.message.reply_text("❌ This listing has been fully claimed.")
+                return
+                
+            # Start the claim process
+            context.user_data["claiming_msg_id"] = msg_id
+            context.user_data["claim_step"] = "qty"
+            
+            await update.message.reply_text(
+                f"You're claiming <b>{l['item']}</b>.\n\n"
+                "📦 How many units would you like to collect?",
+                parse_mode="HTML"
+            )
             return
             
-        l = LISTINGS[msg_id]
-        if l["remaining"] <= 0:
-            await update.message.reply_text("❌ This listing has been fully claimed.")
+        except Exception as e:
+            import traceback
+            print(f"Error in start command: {e}")
+            print(traceback.format_exc())
+            await update.message.reply_text("❌ An error occurred. Please try again.")
             return
-        context.user_data["claiming_msg_id"] = msg_id
-        context.user_data["claim_step"] = "qty"
-        await update.message.reply_text(
-            f"You're claiming <b>{l['item']}</b>.\n\n"
-            "📦 How many units of the item would you like to collect?",
-            parse_mode="HTML"
-        )
-        return
     
     # Handle /start newitem
     if context.args and context.args[0].lower() == "newitem":
@@ -437,52 +470,63 @@ async def private_message(update, context):
     # If this is a claim attempt from a deep link
     if update.message and update.message.text and update.message.text.startswith("/start claim_"):
         try:
-            msg_id = int(update.message.text.split("_")[1])
-            # Try to refresh from Firebase first
-            if not refresh_listings() or str(msg_id) not in LISTINGS:
-                # Try to find the original poster's listings
+            # Get the message ID from the deep link
+            msg_id = update.message.text.split("_")[1]
+            print(f"Claim attempt for message ID: {msg_id}")
+            
+            # Force refresh listings from Firebase
+            refresh_listings()
+            print(f"Current LISTINGS keys: {list(LISTINGS.keys())}")
+            
+            # Check if the listing exists in our current data
+            if msg_id not in LISTINGS:
+                print(f"Listing {msg_id} not found in LISTINGS, checking user_listings...")
+                # Try to find the listing in user_listings
                 user_listings = db.reference("user_listings").get() or {}
-                poster_id = None
+                found = False
                 
-                # Find which user originally posted this listing
+                # Search through all user listings
                 for uid, listings in user_listings.items():
-                    if str(msg_id) in listings:
-                        poster_id = uid
+                    if msg_id in listings:
+                        # Found the listing, add it back to active listings
+                        LISTINGS[msg_id] = listings[msg_id]
+                        save_listings()
+                        found = True
+                        print(f"Found listing {msg_id} in user_listings, restored to active listings")
                         break
                 
-                # If the current user is the original poster, offer to repost
-                if str(update.effective_user.id) == poster_id:
-                    keyboard = InlineKeyboardMarkup([
-                        [InlineKeyboardButton("🔄 Repost This Item", callback_data=f"repost_{msg_id}")]
-                    ])
-                    await update.message.reply_text(
-                        "⚠️ This listing is no longer active, but I found it in your history. "
-                        "Would you like to repost it?",
-                        reply_markup=keyboard
-                    )
-                else:
+                if not found:
+                    print(f"Listing {msg_id} not found anywhere")
                     await update.message.reply_text(
                         "⚠️ This listing is no longer available. "
                         "Please ask the original poster to create a new listing."
                     )
-                return
-                
-            l = LISTINGS[str(msg_id)]
-            if l["remaining"] <= 0:
+                    return
+            
+            # Now get the listing
+            l = LISTINGS[msg_id]
+            
+            if l.get("remaining", 0) <= 0:
                 await update.message.reply_text("❌ This listing has been fully claimed.")
                 return
                 
-            context.user_data["claiming_msg_id"] = str(msg_id)
+            # Start the claim process
+            context.user_data["claiming_msg_id"] = msg_id
             context.user_data["claim_step"] = "qty"
+            
             await update.message.reply_text(
                 f"You're claiming <b>{l['item']}</b>.\n\n"
                 "📦 How many units would you like to collect?",
                 parse_mode="HTML"
             )
             return
-        except (IndexError, ValueError) as e:
+            
+        except Exception as e:
+            import traceback
             print(f"Error in private_message: {e}")
-            pass
+            print(traceback.format_exc())
+            await update.message.reply_text("❌ An error occurred. Please try again.")
+            return
     
     # Handle normal claim flow steps
     if "claim_step" not in context.user_data:
@@ -769,63 +813,82 @@ async def handle_repost(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         # Extract the message ID from the callback data
-        msg_id = q.data.split("_")[1]
+        original_msg_id = q.data.split("_")
+        if len(original_msg_id) < 2:
+            await q.edit_message_text("❌ Invalid repost request.")
+            return
+            
+        original_msg_id = original_msg_id[1]
         
         # Get the original listing from user_listings
         user_listings = db.reference("user_listings").get() or {}
         listing_data = None
         
+        # Find the listing in user_listings
         for uid, listings in user_listings.items():
-            if msg_id in listings:
-                listing_data = listings[msg_id]
+            if original_msg_id in listings:
+                listing_data = listings[original_msg_id]
                 break
         
         if not listing_data:
-            await q.edit_message_text("❌ Could not find the original listing data.")
-            return
+            # Try to find in active listings as fallback
+            if original_msg_id in LISTINGS:
+                listing_data = LISTINGS[original_msg_id]
+            else:
+                await q.edit_message_text("❌ Could not find the original listing data.")
+                return
         
         # Create a new listing with the same data
-        new_msg_id = str(max([int(k) for k in LISTINGS.keys()] + [0]) + 1)
-        listing_data = listing_data.copy()  # Create a copy to avoid reference issues
-        listing_data['poster_id'] = str(q.from_user.id)
-        listing_data['timestamp'] = datetime.datetime.now().isoformat()
-        listing_data['remaining'] = listing_data.get('qty', 1)  # Reset remaining quantity
+        new_msg_id = str(max([int(k) if k.isdigit() else 0 for k in LISTINGS.keys()] + [0]) + 1)
         
-        # Add to active listings and save
-        LISTINGS[new_msg_id] = listing_data
+        # Create a deep copy of the listing data
+        import copy
+        new_listing = copy.deepcopy(listing_data)
+        
+        # Update the listing data
+        new_listing['poster_id'] = str(q.from_user.id)
+        new_listing['timestamp'] = datetime.datetime.now().isoformat()
+        new_listing['remaining'] = new_listing.get('qty', 1)  # Reset remaining quantity
+        
+        # Add to active listings
+        LISTINGS[new_msg_id] = new_listing
+        
+        # Save to Firebase
         save_listings()
         
-        # Refresh listings to ensure consistency
-        refresh_listings()
-        
-        # Post to channel
-        await update_channel_post(context, int(new_msg_id))
-        
-        # Create a new post in the channel
+        # Create the message text for the channel
         text = (
-            f"🧾 <b>{listing_data['item']}</b>\n"
-            f"📦 Available: {listing_data['qty']} {listing_data.get('unit', 'units')}\n"
-            f"📏 Size: {listing_data['size']}\n"
-            f"⏰ Expiry: {listing_data['expiry']}\n"
-            f"📍 {listing_data['location']}"
+            f"🧾 <b>{new_listing['item']}</b>\n"
+            f"📦 Available: {new_listing['qty']} {new_listing.get('unit', 'units')}\n"
+            f"📏 Size: {new_listing.get('size', 'N/A')}\n"
+            f"⏰ Expiry: {new_listing.get('expiry', 'N/A')}\n"
+            f"📍 {new_listing.get('location', 'N/A')}"
         )
         
+        # Create the claim button with the new message ID
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("🤝 Claim", url=f"https://t.me/{context.bot.username}?start=claim_{new_msg_id}")
         ]])
         
         # Send the new post to the channel
-        await context.bot.send_message(
+        sent_message = await context.bot.send_message(
             chat_id=CHANNEL_ID,
             text=text,
             reply_markup=keyboard,
             parse_mode="HTML"
         )
         
+        # Update the listing with the new message ID
+        new_listing['message_id'] = sent_message.message_id
+        LISTINGS[new_msg_id] = new_listing
+        save_listings()
+        
         await q.edit_message_text("✅ Your item has been reposted to the channel!")
         
     except Exception as e:
+        import traceback
         print(f"Error in handle_repost: {e}")
+        print(traceback.format_exc())
         await q.edit_message_text("❌ An error occurred while reposting. Please try again.")
 
 # ========= HANDLER CONFIG =========
