@@ -48,7 +48,16 @@ def refresh_listings():
     """Refresh the LISTINGS dictionary from Firebase."""
     global LISTINGS
     try:
-        data = ref.get()
+        # Get both listings and user_listings
+        data = ref.get() or {}
+        user_listings = db.reference("user_listings").get() or {}
+        
+        # Merge user_listings into listings if they exist
+        if user_listings:
+            for user_id, listings in user_listings.items():
+                for msg_id, listing in listings.items():
+                    data[msg_id] = listing
+        
         if data:
             LISTINGS = data
             print(f"🔄 Loaded {len(LISTINGS)} listings from Firebase.")
@@ -63,7 +72,21 @@ def refresh_listings():
 def save_listings():
     """Save current LISTINGS dictionary to Firebase."""
     try:
+        # Save to main listings
         ref.set(LISTINGS)
+        
+        # Also maintain a separate index by user for reposting
+        user_listings = {}
+        for msg_id, listing in LISTINGS.items():
+            poster_id = listing.get('poster_id')
+            if poster_id:
+                if poster_id not in user_listings:
+                    user_listings[poster_id] = {}
+                user_listings[poster_id][msg_id] = listing
+        
+        # Save user listings index
+        db.reference("user_listings").set(user_listings)
+        
         print(f"💾 Saved {len(LISTINGS)} listings to Firebase.")
         return True
     except Exception as e:
@@ -179,12 +202,33 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg_id = int(context.args[0].split("_")[1])
         # Try to refresh from Firebase first
         if not refresh_listings() or msg_id not in LISTINGS:
-            await update.message.reply_text(
-                "⚠️ This listing is no longer available in our system.\n\n"
-                "This might be because the bot was recently restarted. "
-                "Please ask the original poster to create a new listing."
-            )
+            # Try to find the original poster's listings
+            user_listings = db.reference("user_listings").get() or {}
+            poster_id = None
+            
+            # Find which user originally posted this listing
+            for uid, listings in user_listings.items():
+                if str(msg_id) in listings:
+                    poster_id = uid
+                    break
+            
+            # If the current user is the original poster, offer to repost
+            if str(update.effective_user.id) == poster_id:
+                keyboard = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Repost This Item", callback_data=f"repost_{msg_id}")]
+                ])
+                await update.message.reply_text(
+                    "⚠️ This listing is no longer active, but I found it in your history. "
+                    "Would you like to repost it?",
+                    reply_markup=keyboard
+                )
+            else:
+                await update.message.reply_text(
+                    "⚠️ This listing is no longer available. "
+                    "Please ask the original poster to create a new listing."
+                )
             return
+            
         l = LISTINGS[msg_id]
         if l["remaining"] <= 0:
             await update.message.reply_text("❌ This listing has been fully claimed.")
@@ -605,6 +649,41 @@ async def handle_newtime_reply(update, context):
         await context.bot.send_message(l["poster_id"], f"❌ Buyer @{buyer.username or buyer.first_name} declined your new timing.")
         await q.edit_message_text("❌ You declined the new timing. Claim cancelled.")
 
+# ========= REPOST HANDLERS =========
+async def handle_repost(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    
+    # Extract the message ID from the callback data
+    msg_id = int(q.data.split("_")[1])
+    
+    # Get the original listing from user_listings
+    user_listings = db.reference("user_listings").get() or {}
+    listing_data = None
+    
+    for uid, listings in user_listings.items():
+        if str(msg_id) in listings:
+            listing_data = listings[str(msg_id)]
+            break
+    
+    if not listing_data:
+        await q.edit_message_text("❌ Could not find the original listing data.")
+        return
+    
+    # Create a new listing with the same data
+    new_msg_id = max([int(k) for k in LISTINGS.keys()] + [0]) + 1
+    listing_data['poster_id'] = q.from_user.id
+    listing_data['timestamp'] = datetime.datetime.now().isoformat()
+    
+    # Add to active listings
+    LISTINGS[new_msg_id] = listing_data
+    save_listings()
+    
+    # Post to channel
+    await update_channel_post(context, new_msg_id)
+    
+    await q.edit_message_text("✅ Your item has been reposted to the channel!")
+
 # ========= HANDLER CONFIG =========
 conv_handler = ConversationHandler(
     entry_points=[
@@ -643,8 +722,9 @@ suggest_conv = ConversationHandler(
 app = Application.builder().token(BOT_TOKEN).build()
 # Add start handler first to handle /start without newitem
 app.add_handler(CommandHandler("start", start))
-# Then add conversation handler
+# Add all handlers
 app.add_handler(conv_handler)
+app.add_handler(CallbackQueryHandler(handle_repost, pattern="^repost_"))
 app.add_handler(CallbackQueryHandler(deprecate_old_donate_button, pattern="^help_newitem$"))
 app.add_handler(CommandHandler("channel", channel))
 app.add_handler(CommandHandler("instructions", instructions))
