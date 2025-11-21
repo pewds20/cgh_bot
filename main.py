@@ -38,26 +38,37 @@ firebase_admin.initialize_app(cred, {
 ref = db.reference("listings")
 LISTINGS = ref.get() or {}
 
-def save_listings():
-    try:
-        ref.set(LISTINGS)
-        print(f"💾 Saved {len(LISTINGS)} listings to Firebase.")
-    except Exception as e:
-        print(f"⚠️ Failed to save listings: {e}")
-
-
+# Initialize Firebase reference
 ref = db.reference("listings")
 
-# Load data if any
-LISTINGS = ref.get() or {}
+# Global variable to store listings
+LISTINGS = {}
+
+def refresh_listings():
+    """Refresh the LISTINGS dictionary from Firebase."""
+    global LISTINGS
+    try:
+        data = ref.get()
+        if data:
+            LISTINGS = data
+            print(f"🔄 Loaded {len(LISTINGS)} listings from Firebase.")
+        else:
+            LISTINGS = {}
+            print("ℹ️ No existing listings found in Firebase.")
+        return True
+    except Exception as e:
+        print(f"⚠️ Failed to load listings from Firebase: {e}")
+        return False
 
 def save_listings():
     """Save current LISTINGS dictionary to Firebase."""
     try:
         ref.set(LISTINGS)
         print(f"💾 Saved {len(LISTINGS)} listings to Firebase.")
+        return True
     except Exception as e:
-        print(f"⚠️ Failed to save listings: {e}")
+        print(f"⚠️ Failed to save listings to Firebase: {e}")
+        return False
 
 # ========= KEEP-ALIVE SERVER =========
 app_keepalive = Flask(__name__)
@@ -166,10 +177,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Handle deep link for claims
     if context.args and context.args[0].startswith("claim_"):
         msg_id = int(context.args[0].split("_")[1])
-        l = LISTINGS.get(msg_id)
-        if not l:
-            await update.message.reply_text("❌ This listing is no longer available.")
+        # Try to refresh from Firebase first
+        if not refresh_listings() or msg_id not in LISTINGS:
+            await update.message.reply_text(
+                "⚠️ This listing is no longer available in our system.\n\n"
+                "This might be because the bot was recently restarted. "
+                "Please ask the original poster to create a new listing."
+            )
             return
+        l = LISTINGS[msg_id]
         if l["remaining"] <= 0:
             await update.message.reply_text("❌ This listing has been fully claimed.")
             return
@@ -416,10 +432,15 @@ async def handle_claim_decision(update, context):
     await q.answer()
     action, msg_id, user_id, qty, pickup_time = q.data.split("|")
     msg_id, user_id, qty = int(msg_id), int(user_id), int(qty)
-    l = LISTINGS.get(msg_id)
-    if not l:
-        await q.edit_message_text("⚠️ Listing no longer exists.")
+    # Try to refresh from Firebase first
+    if not refresh_listings() or msg_id not in LISTINGS:
+        await q.edit_message_text(
+            "⚠️ This listing is no longer available in our system.\n\n"
+            "This might be because the bot was recently restarted. "
+            "The original poster will need to create a new listing."
+        )
         return
+    l = LISTINGS[msg_id]
 
     buyer = await context.bot.get_chat(user_id)
 
@@ -558,11 +579,16 @@ async def handle_newtime_reply(update, context):
     await q.answer()
     parts = q.data.split("|")
     action, msg_id = parts[0], int(parts[1])
-    l = LISTINGS.get(msg_id)
-    buyer = q.from_user
-    if not l:
-        await q.edit_message_text("⚠️ Listing no longer available.")
+    # Try to refresh from Firebase first
+    if not refresh_listings() or msg_id not in LISTINGS:
+        await q.edit_message_text(
+            "⚠️ This listing is no longer available in our system.\n\n"
+            "This might be because the bot was recently restarted. "
+            "Please ask the original poster to create a new listing."
+        )
         return
+    l = LISTINGS[msg_id]
+    buyer = q.from_user
 
     if action == "accept_newtime":
         qty, proposed_time = int(parts[2]), parts[3]
@@ -638,7 +664,12 @@ async def set_commands(app):
     ])
 app.post_init = set_commands
 
-print("🤖 Bot running with Firebase persistence + keep-alive + auto-archive ...")
+print("🤖 Bot starting with Firebase persistence + keep-alive + auto-archive ...")
+
+# Initialize listings from Firebase on startup
 if __name__ == "__main__":
+    if not refresh_listings():
+        print("⚠️ Warning: Could not load initial listings from Firebase")
     keep_alive()
+    print("✅ Bot is now running!")
     app.run_polling()
