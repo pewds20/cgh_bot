@@ -434,11 +434,37 @@ async def post_to_channel(update, context):
 
 # ========= CLAIM FLOW =========
 async def private_message(update, context):
+    # If this is a claim attempt from a deep link
+    if update.message and update.message.text and update.message.text.startswith("/start claim_"):
+        try:
+            msg_id = int(update.message.text.split("_")[1])
+            if not refresh_listings() or msg_id not in LISTINGS:
+                await update.message.reply_text("⚠️ This listing is no longer available.")
+                return
+            
+            l = LISTINGS[msg_id]
+            if l["remaining"] <= 0:
+                await update.message.reply_text("❌ This listing has been fully claimed.")
+                return
+                
+            context.user_data["claiming_msg_id"] = msg_id
+            context.user_data["claim_step"] = "qty"
+            await update.message.reply_text(
+                f"You're claiming <b>{l['item']}</b>.\n\n"
+                "📦 How many units would you like to claim?",
+                parse_mode="HTML"
+            )
+            return
+        except (IndexError, ValueError):
+            pass
+    
+    # Handle normal claim flow steps
     if "claim_step" not in context.user_data:
         return
+        
     msg_id = context.user_data.get("claiming_msg_id")
     if msg_id is None or msg_id not in LISTINGS:
-        await update.message.reply_text("⚠️ I can’t find that listing. Please tap Claim again.")
+        await update.message.reply_text("⚠️ I can't find that listing. Please tap Claim again.")
         context.user_data.clear()
         return
 
