@@ -562,11 +562,15 @@ async def private_message(update, context):
         pickup_time = update.message.text
         qty = context.user_data["claim_qty"]
         seller_id = l["poster_id"]
-        kb = InlineKeyboardMarkup([[
-            InlineKeyboardButton("✅ Approve", callback_data=f"approve|{msg_id}|{user.id}|{qty}|{pickup_time}"),
-            InlineKeyboardButton("🕓 Suggest New Time", callback_data=f"suggest|{msg_id}|{user.id}|{qty}"),
-            InlineKeyboardButton("❌ Reject", callback_data=f"reject|{msg_id}|{user.id}|{qty}|{pickup_time}")
-        ]])
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Approve", callback_data=f"approve|{msg_id}|{user.id}|{qty}|{pickup_time}"),
+                InlineKeyboardButton("❌ Reject", callback_data=f"reject|{msg_id}|{user.id}|{qty}|{pickup_time}")
+            ],
+            [
+                InlineKeyboardButton("🕓 Suggest New Time", callback_data=f"suggest|{msg_id}|{user.id}|{qty}")
+            ]
+        ])
         
         # Send to seller
         await context.bot.send_message(
@@ -637,24 +641,44 @@ async def handle_claim_decision(update, context):
         )
         await q.edit_message_text(f"❌ Rejected claim for @{buyer.username or buyer.first_name}.")
 
+    elif action == "suggest":
+        # This is handled by the suggest_conv handler now
+        # Just acknowledge the callback to prevent "unanswered callback query" warnings
+        await q.answer()
+        await q.edit_message_text(
+            "📅 <b>Suggest a new pickup time:</b>\n\n"
+            "Please enter a new date and time in one of these formats:\n\n"
+            "• <code>25/12/2023 14:30</code>\n"
+            "• <code>Tomorrow 3pm</code>\n"
+            "• <code>Next Monday 10am</code>\n\n"
+            "The buyer will receive your suggested time and can accept or decline it.",
+            parse_mode="HTML"
+        )
+
 # ========= SUGGEST NEW DATE/TIME FLOW =========
 async def suggest_time(update, context):
     q = update.callback_query
     await q.answer()
     
-    # Parse the callback data: suggest|{msg_id}|{user_id}|{qty}
-    parts = q.data.split('|')
-    if len(parts) >= 2:
-        msg_id = int(parts[1])
-        context.user_data["suggesting_for"] = msg_id
-        
-        # Store the claim info for later use
-        if len(parts) >= 4:
-            context.user_data["claim_info"] = {
-                "buyer_id": int(parts[2]),
-                "qty": int(parts[3])
-            }
+    try:
+        # Parse the callback data: suggest|{msg_id}|{user_id}|{qty}
+        parts = q.data.split('|')
+        if len(parts) < 4:
+            await q.edit_message_text("❌ Error: Invalid request. Please try again.")
+            return ConversationHandler.END
             
+        msg_id = parts[1]
+        buyer_id = parts[2]
+        qty = parts[3]
+        
+        # Store the claim info in user_data
+        context.user_data["suggesting_for"] = msg_id
+        context.user_data["claim_info"] = {
+            "buyer_id": int(buyer_id),
+            "qty": int(qty)
+        }
+        
+        # Edit the message to ask for new time
         await q.edit_message_text(
             "📅 <b>Suggest a new pickup time:</b>\n\n"
             "Please enter a new date and time in one of these formats:\n\n"
@@ -665,9 +689,13 @@ async def suggest_time(update, context):
             parse_mode="HTML"
         )
         return SUGGEST
-    
-    await q.edit_message_text("❌ Error: Could not process your request. Please try again.")
-    return ConversationHandler.END
+        
+    except Exception as e:
+        print(f"Error in suggest_time: {e}")
+        import traceback
+        print(traceback.format_exc())
+        await q.edit_message_text("❌ An error occurred. Please try again.")
+        return ConversationHandler.END
 
 async def handle_suggest_time_text(update, context):
     proposed_time = update.message.text.strip()
@@ -916,7 +944,7 @@ conv_handler = ConversationHandler(
 )
 
 suggest_conv = ConversationHandler(
-    entry_points=[CallbackQueryHandler(suggest_time, pattern="^suggest")],
+    entry_points=[CallbackQueryHandler(suggest_time, pattern=r'^suggest\|')],
     states={
         SUGGEST: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggest_time_text)
