@@ -671,11 +671,18 @@ async def suggest_time(update, context):
         buyer_id = parts[2]
         qty = parts[3]
         
+        # Check if listing still exists and has stock
+        refresh_listings()
+        if msg_id not in LISTINGS or LISTINGS[msg_id].get('remaining', 0) <= 0:
+            await q.edit_message_text("❌ This listing is no longer available.")
+            return ConversationHandler.END
+        
         # Store the claim info in user_data
         context.user_data["suggesting_for"] = msg_id
         context.user_data["claim_info"] = {
             "buyer_id": int(buyer_id),
-            "qty": int(qty)
+            "qty": int(qty),
+            "original_msg_id": update.callback_query.message.message_id  # Store the original message ID
         }
         
         # Edit the message to ask for new time
@@ -702,30 +709,41 @@ async def handle_suggest_time_text(update, context):
     msg_id = context.user_data.get("suggesting_for")
     claim_info = context.user_data.get("claim_info", {})
     
-    if not msg_id or not claim_info or msg_id not in LISTINGS:
-        await update.message.reply_text("❌ Error: Could not process your request. Please try claiming the item again.")
-        context.user_data.clear()
+    # Clear the conversation state first to prevent duplicate messages
+    context.user_data.clear()
+    
+    # Check if we have all required data
+    if not msg_id or not claim_info:
+        await update.message.reply_text("❌ Error: Session expired. Please try claiming the item again.")
         return ConversationHandler.END
-        
+    
+    # Check if the listing still exists and has stock
+    refresh_listings()
+    if msg_id not in LISTINGS or LISTINGS[msg_id].get('remaining', 0) <= 0:
+        await update.message.reply_text("❌ This listing is no longer available.")
+        return ConversationHandler.END
+    
     l = LISTINGS[msg_id]
     buyer_id = claim_info.get("buyer_id")
     qty = claim_info.get("qty", 1)
+    original_msg_id = claim_info.get("original_msg_id")
     
-    # Create the message with accept/decline buttons
-    kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Accept", callback_data=f"accept_newtime|{msg_id}|{qty}|{proposed_time}"),
-            InlineKeyboardButton("❌ Decline", callback_data=f"decline_newtime|{msg_id}")
-        ]
-    ])
-    
-    # Format the message to the buyer
-    msg = (
-        "📌 <b>NEW PICKUP TIME SUGGESTED</b>\n\n"
-        f"🛍️ <b>Item:</b> {l['item']}\n"
-        f"📦 <b>Quantity:</b> {qty}\n"
-        f"📅 <b>Proposed Pickup Time:</b> {proposed_time}\n"
-        f"📍 <b>Location:</b> {l['location']}\n\n"
+    try:
+        # Create the message with accept/decline buttons
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Accept", callback_data=f"accept_newtime|{msg_id}|{qty}|{proposed_time}"),
+                InlineKeyboardButton("❌ Decline", callback_data=f"decline_newtime|{msg_id}")
+            ]
+        ])
+        
+        # Format the message to the buyer
+        msg = (
+            "📌 <b>NEW PICKUP TIME SUGGESTED</b>\n\n"
+            f"🛍️ <b>Item:</b> {l['item']}\n"
+            f"📦 <b>Quantity:</b> {qty}\n"
+            f"📅 <b>Proposed Pickup Time:</b> {proposed_time}\n"
+            f"📍 <b>Location:</b> {l['location']}\n\n"
         "Please accept or decline this new pickup time:"
     )
     
@@ -807,32 +825,71 @@ async def handle_newtime_reply(update, context):
     q = update.callback_query
     await q.answer()
     parts = q.data.split("|")
-    action, msg_id = parts[0], int(parts[1])
-    # Try to refresh from Firebase first
-    if not refresh_listings() or msg_id not in LISTINGS:
-        await q.edit_message_text(
-            "⚠️ This listing is no longer available in our system.\n\n"
-            "This might be because the bot was recently restarted. "
-            "Please ask the original poster to create a new listing."
-        )
+    action = parts[0]
+    msg_id = parts[1]  # Keep as string to match LISTINGS keys
+    
+    # Check if listing still exists and has stock
+    refresh_listings()
+    if msg_id not in LISTINGS or LISTINGS[msg_id].get('remaining', 0) <= 0:
+        await q.edit_message_text("❌ This listing is no longer available.")
         return
+        
     l = LISTINGS[msg_id]
-    buyer = q.from_user
-
+    
     if action == "accept_newtime":
-        qty, proposed_time = int(parts[2]), parts[3]
-        l["remaining"] -= qty
-        l["claims"].append({"user_id": buyer.id, "qty": qty, "time": proposed_time})
+        qty = int(parts[2])
+        new_time = parts[3]
+        
+        # Update the listing with the new time
+        l['pickup_time'] = new_time
         save_listings()
-        await update_channel_post(context, msg_id)
+        
+        try:
+            # Try to edit the original message to remove the buttons
+            await context.bot.edit_message_reply_markup(
+                chat_id=q.message.chat_id,
+                message_id=q.message.message_id,
+                reply_markup=None
+            )
+        except Exception as e:
+            print(f"Could not edit message: {e}")
+        
+        # Notify the seller
         await context.bot.send_message(
-            l["poster_id"],
-            f"✅ Buyer @{buyer.username or buyer.first_name} accepted your new pickup timing:\n{proposed_time} ({qty} boxes)."
+            l['poster_id'],
+            f"✅ Buyer has accepted the new pickup time: {new_time}\n\n"
+            f"🛍️ Item: {l['item']}\n"
+            f"📦 Quantity: {qty}\n"
+            f"📍 Location: {l['location']}"
         )
-        await q.edit_message_text(f"✅ Pickup confirmed for {qty} of {l['item']} at {proposed_time}.")
+        
+        # Update the buyer
+        await q.message.reply_text(
+            f"✅ You've accepted the new pickup time: {new_time}\n\n"
+            f"🛍️ Item: {l['item']}\n"
+            f"📦 Quantity: {qty}\n"
+            f"📍 Location: {l['location']}\n\n"
+            "The seller has been notified. Thank you!"
+        )
+        
     elif action == "decline_newtime":
-        await context.bot.send_message(l["poster_id"], f"❌ Buyer @{buyer.username or buyer.first_name} declined your new timing.")
-        await q.edit_message_text("❌ You declined the new timing. Claim cancelled.")
+        try:
+            # Try to edit the original message to remove the buttons
+            await context.bot.edit_message_reply_markup(
+                chat_id=q.message.chat_id,
+                message_id=q.message.message_id,
+                reply_markup=None
+            )
+        except Exception as e:
+            print(f"Could not edit message: {e}")
+        
+        await q.message.reply_text("❌ You've declined the suggested pickup time.")
+        
+        # Notify the seller
+        await context.bot.send_message(
+            l.get('poster_id'),
+            f"❌ The buyer has declined your suggested pickup time for {l.get('item', 'the item')}."
+        )
 
 # ========= REPOST HANDLERS =========
 async def handle_repost(update: Update, context: ContextTypes.DEFAULT_TYPE):
