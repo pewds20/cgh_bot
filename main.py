@@ -438,24 +438,50 @@ async def private_message(update, context):
     if update.message and update.message.text and update.message.text.startswith("/start claim_"):
         try:
             msg_id = int(update.message.text.split("_")[1])
-            if not refresh_listings() or msg_id not in LISTINGS:
-                await update.message.reply_text("⚠️ This listing is no longer available.")
+            # Try to refresh from Firebase first
+            if not refresh_listings() or str(msg_id) not in LISTINGS:
+                # Try to find the original poster's listings
+                user_listings = db.reference("user_listings").get() or {}
+                poster_id = None
+                
+                # Find which user originally posted this listing
+                for uid, listings in user_listings.items():
+                    if str(msg_id) in listings:
+                        poster_id = uid
+                        break
+                
+                # If the current user is the original poster, offer to repost
+                if str(update.effective_user.id) == poster_id:
+                    keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 Repost This Item", callback_data=f"repost_{msg_id}")]
+                    ])
+                    await update.message.reply_text(
+                        "⚠️ This listing is no longer active, but I found it in your history. "
+                        "Would you like to repost it?",
+                        reply_markup=keyboard
+                    )
+                else:
+                    await update.message.reply_text(
+                        "⚠️ This listing is no longer available. "
+                        "Please ask the original poster to create a new listing."
+                    )
                 return
-            
-            l = LISTINGS[msg_id]
+                
+            l = LISTINGS[str(msg_id)]
             if l["remaining"] <= 0:
                 await update.message.reply_text("❌ This listing has been fully claimed.")
                 return
                 
-            context.user_data["claiming_msg_id"] = msg_id
+            context.user_data["claiming_msg_id"] = str(msg_id)
             context.user_data["claim_step"] = "qty"
             await update.message.reply_text(
                 f"You're claiming <b>{l['item']}</b>.\n\n"
-                "📦 How many units would you like to claim?",
+                "📦 How many units would you like to collect?",
                 parse_mode="HTML"
             )
             return
-        except (IndexError, ValueError):
+        except (IndexError, ValueError) as e:
+            print(f"Error in private_message: {e}")
             pass
     
     # Handle normal claim flow steps
@@ -714,35 +740,66 @@ async def handle_repost(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     
-    # Extract the message ID from the callback data
-    msg_id = int(q.data.split("_")[1])
-    
-    # Get the original listing from user_listings
-    user_listings = db.reference("user_listings").get() or {}
-    listing_data = None
-    
-    for uid, listings in user_listings.items():
-        if str(msg_id) in listings:
-            listing_data = listings[str(msg_id)]
-            break
-    
-    if not listing_data:
-        await q.edit_message_text("❌ Could not find the original listing data.")
-        return
-    
-    # Create a new listing with the same data
-    new_msg_id = max([int(k) for k in LISTINGS.keys()] + [0]) + 1
-    listing_data['poster_id'] = q.from_user.id
-    listing_data['timestamp'] = datetime.datetime.now().isoformat()
-    
-    # Add to active listings
-    LISTINGS[new_msg_id] = listing_data
-    save_listings()
-    
-    # Post to channel
-    await update_channel_post(context, new_msg_id)
-    
-    await q.edit_message_text("✅ Your item has been reposted to the channel!")
+    try:
+        # Extract the message ID from the callback data
+        msg_id = q.data.split("_")[1]
+        
+        # Get the original listing from user_listings
+        user_listings = db.reference("user_listings").get() or {}
+        listing_data = None
+        
+        for uid, listings in user_listings.items():
+            if msg_id in listings:
+                listing_data = listings[msg_id]
+                break
+        
+        if not listing_data:
+            await q.edit_message_text("❌ Could not find the original listing data.")
+            return
+        
+        # Create a new listing with the same data
+        new_msg_id = str(max([int(k) for k in LISTINGS.keys()] + [0]) + 1)
+        listing_data = listing_data.copy()  # Create a copy to avoid reference issues
+        listing_data['poster_id'] = str(q.from_user.id)
+        listing_data['timestamp'] = datetime.datetime.now().isoformat()
+        listing_data['remaining'] = listing_data.get('qty', 1)  # Reset remaining quantity
+        
+        # Add to active listings and save
+        LISTINGS[new_msg_id] = listing_data
+        save_listings()
+        
+        # Refresh listings to ensure consistency
+        refresh_listings()
+        
+        # Post to channel
+        await update_channel_post(context, int(new_msg_id))
+        
+        # Create a new post in the channel
+        text = (
+            f"🧾 <b>{listing_data['item']}</b>\n"
+            f"📦 Available: {listing_data['qty']} {listing_data.get('unit', 'units')}\n"
+            f"📏 Size: {listing_data['size']}\n"
+            f"⏰ Expiry: {listing_data['expiry']}\n"
+            f"📍 {listing_data['location']}"
+        )
+        
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🤝 Claim", url=f"https://t.me/{context.bot.username}?start=claim_{new_msg_id}")
+        ]])
+        
+        # Send the new post to the channel
+        await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=text,
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        
+        await q.edit_message_text("✅ Your item has been reposted to the channel!")
+        
+    except Exception as e:
+        print(f"Error in handle_repost: {e}")
+        await q.edit_message_text("❌ An error occurred while reposting. Please try again.")
 
 # ========= HANDLER CONFIG =========
 conv_handler = ConversationHandler(
