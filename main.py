@@ -619,19 +619,39 @@ async def handle_claim_decision(update, context):
         if l["remaining"] < qty:
             await q.edit_message_text("⚠️ Not enough remaining stock to approve.")
             return
+        
+        # Update the remaining quantity
         l["remaining"] -= qty
+        
+        # Initialize claims list if it doesn't exist
+        if "claims" not in l:
+            l["claims"] = []
+            
+        # Add the claim
         l["claims"].append({"user_id": user_id, "qty": qty, "time": pickup_time})
-        save_listings()
+        
+        # Save to Firebase
+        if not save_listings():
+            await q.edit_message_text("⚠️ Failed to save the updated listing. Please try again.")
+            return
+            
+        # Update the channel post
         await update_channel_post(context, msg_id)
-        await context.bot.send_message(
-            user_id,
-            f"✅ Your claim for <b>{l['item']}</b> has been approved!\n\n"
-            f"📦 Quantity: <b>{qty}</b>\n"
-            f"⏰ Pickup: <b>{pickup_time}</b>\n"
-            f"📍 Location: <b>{l['location']}</b>",
-            parse_mode="HTML"
-        )
-        await q.edit_message_text(f"✅ Approved claim for @{buyer.username or buyer.first_name} ({qty}× {l['item']})")
+        
+        # Notify the buyer
+        try:
+            await context.bot.send_message(
+                user_id,
+                f"✅ Your claim for <b>{l['item']}</b> has been approved!\n\n"
+                f"📦 Quantity: <b>{qty}</b>\n"
+                f"⏰ Pickup: <b>{pickup_time}</b>\n"
+                f"📍 Location: <b>{l['location']}</b>",
+                parse_mode="HTML"
+            )
+            await q.edit_message_text(f"✅ Approved claim for @{buyer.username or buyer.first_name} ({qty}× {l['item']})")
+        except Exception as e:
+            print(f"Error sending approval message: {e}")
+            await q.edit_message_text(f"✅ Approved claim for @{buyer.username or buyer.first_name} ({qty}× {l['item']})\n\n⚠️ Could not send message to buyer. They may have blocked the bot or deactivated their account.")
 
     elif action == "reject":
         await context.bot.send_message(
@@ -890,7 +910,13 @@ async def handle_repost(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Update the listing data
         new_listing['poster_id'] = str(q.from_user.id)
         new_listing['timestamp'] = datetime.datetime.now().isoformat()
-        new_listing['remaining'] = new_listing.get('qty', 1)  # Reset remaining quantity
+        
+        # If the listing is still active (not in user_listings), use the remaining quantity
+        if original_msg_id in LISTINGS:
+            new_listing['remaining'] = LISTINGS[original_msg_id].get('remaining', new_listing.get('qty', 1))
+        else:
+            # For archived listings, reset to the original quantity
+            new_listing['remaining'] = new_listing.get('qty', 1)
         
         # Add to active listings
         LISTINGS[new_msg_id] = new_listing
