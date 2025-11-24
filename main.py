@@ -588,8 +588,8 @@ async def private_message(update, context):
             await update.message.reply_text("❌ An error occurred while processing your claim. Please try again.")
             return ConversationHandler.END
     
-    # Regular message (not a claim attempt)
-    return ConversationHandler.END
+        # Regular message (not a claim attempt)
+        return ConversationHandler.END
 
 # ========= APPROVE / REJECT HANDLER =========
 async def handle_claim_decision(update, context):
@@ -899,10 +899,12 @@ async def handle_newtime_reply(update, context):
             # Notify the seller
             try:
                 await context.bot.send_message(
-                chat_id=listing.get('poster_id'),
-                text=f"❌ The buyer has declined your suggested pickup time for {listing.get('item', 'the item')}."
-            )
-            
+                    chat_id=listing.get('poster_id'),
+                    text=f"❌ The buyer has declined your suggested pickup time for {listing.get('item', 'the item')}."
+                )
+            except Exception as e:
+                print(f"Could not notify seller: {e}")
+                
     except Exception as e:
         print(f"Error in handle_newtime_reply: {e}")
         import traceback
