@@ -1,4 +1,4 @@
 python-telegram-bot==20.3
 Flask
 firebase-admin
-
+gunicorn==21.2.0

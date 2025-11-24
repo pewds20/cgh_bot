@@ -3,6 +3,7 @@
 # - Stateless Firebase implementation
 # - Unique listing IDs
 # - Atomic operations
+# - Last updated: 2023-11-24 11:05 UTC+8
 # - Auto cleanup of old listings
 # ==============================
 
@@ -147,7 +148,8 @@ def home():
     return "Bot is running!"
 
 def run():
-    app_keepalive.run(host='0.0.0.0', port=8080)
+    port = int(os.environ.get('PORT', 8000))
+    app_keepalive.run(host='0.0.0.0', port=port)
 
 def keep_alive():
     t = Thread(target=run)
