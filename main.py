@@ -415,12 +415,53 @@ async def save_photo(update, context):
     photo = update.message.photo[-1]
     file = await photo.get_file()
     context.user_data["photo"] = file.file_id
-    await confirm_post(update, context)
+    
+    # Prepare the preview message
+    preview = (
+        f"🧾 <b>{context.user_data['item']}</b>\n"
+        f"📦 Available: {context.user_data['qty']} available\n"
+        f"📏 Size: {context.user_data.get('size', 'N/A')}\n"
+        f"⏰ Expiry: {context.user_data.get('expiry', 'N/A')}\n"
+        f"📍 Location: {context.user_data['location']}\n\n"
+        "Would you like to post this to the channel?"
+    )
+    
+    buttons = [[
+        InlineKeyboardButton("✅ Post", callback_data="confirm_post"),
+        InlineKeyboardButton("❌ Cancel", callback_data="cancel_post")
+    ]]
+    
+    await update.message.reply_photo(
+        photo=file.file_id,
+        caption=preview,
+        reply_markup=InlineKeyboardMarkup(buttons),
+        parse_mode="HTML"
+    )
     return CONFIRM
 
 async def skip_photo(update, context):
     context.user_data["photo"] = None
-    await confirm_post(update, context)
+    
+    # Prepare the preview message
+    preview = (
+        f"🧾 <b>{context.user_data['item']}</b>\n"
+        f"📦 Available: {context.user_data['qty']} available\n"
+        f"📏 Size: {context.user_data.get('size', 'N/A')}\n"
+        f"⏰ Expiry: {context.user_data.get('expiry', 'N/A')}\n"
+        f"📍 Location: {context.user_data['location']}\n\n"
+        "Would you like to post this to the channel?"
+    )
+    
+    buttons = [[
+        InlineKeyboardButton("✅ Post", callback_data="confirm_post"),
+        InlineKeyboardButton("❌ Cancel", callback_data="cancel_post")
+    ]]
+    
+    await update.message.reply_text(
+        preview,
+        reply_markup=InlineKeyboardMarkup(buttons),
+        parse_mode="HTML"
+    )
     return CONFIRM
 
 async def confirm_post(update, context):
