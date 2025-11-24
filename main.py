@@ -583,36 +583,67 @@ async def post_to_channel(update, context):
     
     # Post to channel
     try:
-        print(f"Attempting to post to channel: {CHANNEL_ID}")
+        print("\n===== POSTING TO CHANNEL =====")
+        print(f"Channel ID: {CHANNEL_ID}")
         print(f"Listing ID: {listing_id}")
         print(f"Has photo: {'photo' in d}")
         
-        if "photo" in d:
-            print(f"Photo ID: {d['photo']}")
-            msg = await context.bot.send_photo(
-                chat_id=CHANNEL_ID,
-                photo=d["photo"],
-                caption=text,
-                reply_markup=keyboard,
-                parse_mode="HTML"
-            )
-        else:
-            print("No photo, sending text message")
-            msg = await context.bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=text,
-                reply_markup=keyboard,
-                parse_mode="HTML"
-            )
+        # Verify channel access first
+        try:
+            print("\n[DEBUG] Verifying channel access...")
+            chat = await context.bot.get_chat(chat_id=CHANNEL_ID)
+            print(f"[DEBUG] Channel info: {chat}")
+            print(f"[DEBUG] Channel type: {chat.type}")
+            print(f"[DEBUG] Channel title: {chat.title}")
+            
+            # Check bot's member status
+            try:
+                member = await chat.get_member(context.bot.id)
+                print(f"[DEBUG] Bot's member status: {member.status}")
+                if hasattr(member, 'can_post_messages'):
+                    print(f"[DEBUG] Bot can post messages: {member.can_post_messages}")
+            except Exception as member_error:
+                print(f"[WARNING] Could not get member status: {member_error}")
+                
+        except Exception as access_error:
+            print(f"[ERROR] Failed to access channel: {access_error}")
+            raise Exception(f"Cannot access channel: {str(access_error)}")
         
-        print(f"Message sent successfully, message_id: {msg.message_id}")
-        
-        # Update the listing with the channel message ID
-        update_listing(listing_id, {"channel_message_id": msg.message_id})
-        print("Listing updated with channel message ID")
-        
-        await q.edit_message_text("✅ Posted to channel!")
-        return ConversationHandler.END
+        # Try to send the message
+        try:
+            if "photo" in d and d["photo"]:
+                print(f"[DEBUG] Sending photo message with ID: {d['photo']}")
+                msg = await context.bot.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=d["photo"],
+                    caption=text,
+                    reply_markup=keyboard,
+                    parse_mode="HTML"
+                )
+            else:
+                print("[DEBUG] Sending text message")
+                msg = await context.bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=text,
+                    reply_markup=keyboard,
+                    parse_mode="HTML"
+                )
+            
+            print(f"[SUCCESS] Message sent! Message ID: {msg.message_id}")
+            
+            # Update the listing with the channel message ID
+            try:
+                update_listing(listing_id, {"channel_message_id": msg.message_id, "status": "open"})
+                print(f"[DEBUG] Successfully updated listing {listing_id} with message ID {msg.message_id}")
+            except Exception as update_error:
+                print(f"[WARNING] Failed to update listing with message ID: {update_error}")
+            
+            await q.edit_message_text("✅ Posted to channel!")
+            return ConversationHandler.END
+            
+        except Exception as send_error:
+            print(f"[ERROR] Failed to send message: {send_error}")
+            raise send_error
         
     except Exception as e:
         import traceback
@@ -1156,19 +1187,34 @@ conv_handler = ConversationHandler(
         CommandHandler("start", start, filters=filters.Regex(r"newitem"))
     ],
     states={
-        ITEM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_qty)],
-        QTY: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_size)],
-        SIZE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_expiry)],
-        EXPIRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_expiry_text)],
-        LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_photo)],
+        ITEM: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, ask_qty)
+        ],
+        QTY: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, ask_size)
+        ],
+        SIZE: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, ask_expiry)
+        ],
+        EXPIRY: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_expiry_text)
+        ],
+        LOCATION: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, ask_photo)
+        ],
         PHOTO: [
             MessageHandler(filters.PHOTO, save_photo),
-            MessageHandler(filters.Regex("^(Skip|skip)$"), skip_photo)
+            MessageHandler(filters.Regex("^(?i)(skip|none|na|not available)$"), skip_photo),
+            MessageHandler(filters.TEXT & ~filters.COMMAND, ask_photo)  # Handle invalid input
         ],
         CONFIRM: [
-            CallbackQueryHandler(post_to_channel, pattern="confirm_post"),
-            CallbackQueryHandler(cancel_post, pattern="cancel_post")
-        ],
+            CallbackQueryHandler(post_to_channel, pattern="^confirm_post$"),
+            CallbackQueryHandler(cancel_post, pattern="^cancel_post$"),
+            CallbackQueryHandler(lambda u, c: None),  # Ignore other callbacks
+            MessageHandler(filters.TEXT & ~filters.COMMAND, 
+                         lambda update, context: update.message.reply_text(
+                             "Please use the buttons to confirm or cancel the post."
+                         ))],
     },
     fallbacks=[CommandHandler("cancel", cancel_post)],
 )
