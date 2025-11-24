@@ -364,9 +364,16 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def newitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the new item listing flow."""
     # Clear any existing user data
-    context.user_data.clear()
+    if 'user_data' in context.user_data:
+        context.user_data.clear()
     
-    await update.message.reply_text(
+    # Get the message to reply to
+    message = update.message
+    if update.callback_query:
+        await update.callback_query.answer()
+        message = update.callback_query.message
+    
+    await message.reply_text(
         "🏥 *CGH Surplus Redistribution*\n\n"
         "📦 What item would you like to list?\n"
         "Example: \"5x Boxes of Gloves\" or \"10x 500ml Hand Sanitizers\"\n\n"
@@ -421,10 +428,28 @@ async def ask_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return EXPIRY
 
+def _parse_expiry_text(text: str) -> str:
+    """Parse and validate expiry date text."""
+    t = text.strip()
+    if t.upper() in ("NA", "N/A"):
+        return "N/A"
+    # Try DD/MM/YY then DD/MM/YYYY then YYYY-MM-DD
+    for fmt in ("%d/%m/%y", "%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            dt = datetime.datetime.strptime(t, fmt).date()
+            return dt.strftime("%d/%m/%y")
+        except ValueError:
+            continue
+    raise ValueError("Invalid date format. Please use DD/MM/YY or YYYY-MM-DD")
+
 async def handle_expiry_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Store expiry and ask for location."""
     expiry_text = update.message.text.strip()
-    context.user_data['expiry'] = expiry_text
+    try:
+        context.user_data['expiry'] = _parse_expiry_text(expiry_text)
+    except ValueError as e:
+        await update.message.reply_text(f"❌ {str(e)}")
+        return EXPIRY
     
     await update.message.reply_text(
         "📍 *Pickup Location*\n\n"
@@ -489,31 +514,6 @@ async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     return CONFIRM
 
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log errors and handle them gracefully."""
-    from telegram import Update
-    from telegram.constants import ParseMode
-    
-    # Log the error
-    print(f"Error: {context.error}")
-    
-    # Send a message to the user
-    error_msg = (
-        "❌ *An error occurred*\n\n"
-        "Sorry, something went wrong while processing your request. "
-        "The error has been logged and will be investigated.\n\n"
-        "Please try again or use /cancel to start over."
-    )
-    
-    if isinstance(update, Update) and update.effective_message:
-        await update.effective_message.reply_text(
-            error_msg,
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-
-# ... (rest of the code remains the same)
-
 async def save_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Save the photo and ask for confirmation."""
     photo = update.message.photo[-1]  # Get the highest resolution photo
@@ -574,6 +574,9 @@ async def post_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         # Save to Firebase
         listing_id = create_listing(listing_data)
+        if not listing_id:
+            await query.edit_message_text("❌ Failed to create listing. Please try again.")
+            return ConversationHandler.END
         
         # Prepare the channel post
         post_text = (
@@ -586,18 +589,25 @@ async def post_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Posted by: {user.full_name}"
         )
         
+        # Create claim button
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🤝 Claim", callback_data=f"claim|{listing_id}")]
+        ])
+        
         # Send to channel
         if 'photo_id' in listing_data and listing_data['photo_id']:
             await context.bot.send_photo(
                 chat_id=CHANNEL_ID,
                 photo=listing_data['photo_id'],
                 caption=post_text,
+                reply_markup=keyboard,
                 parse_mode="Markdown"
             )
         else:
             await context.bot.send_message(
                 chat_id=CHANNEL_ID,
                 text=post_text,
+                reply_markup=keyboard,
                 parse_mode="Markdown"
             )
         
