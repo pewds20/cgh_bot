@@ -7,8 +7,9 @@
 # - Auto cleanup of old listings
 # ==============================
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
-from telegram.constants import ParseMode
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ParseMode
+)
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler,
@@ -306,15 +307,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await newitem(update, context)
     
     msg = (
-        "👋 <b>Welcome to the Sustainability Redistribution Bot!</b>\n\n"
-        "This bot helps hospital staff donate excess consumables easily.\n\n"
+        "🏥 <b>Welcome to CGH Surplus Redistribution Bot</b>\n\n"
+        "This bot helps CGH staff share excess medical supplies and equipment.\n\n"
         "<b>Available Commands:</b>\n"
-        "/newitem - Donate excess items\n"
-        "/instructions - Learn how it works\n\n"
-        "<i>⚠️ <b>Note:</b> If you encounter any issues with the bot, "
-        "please contact the admin or post directly in the channel. "
-        "In case of technical difficulties, manual coordination "
-        "through the channel may be necessary.</i>"
+        "📦 /newitem - List an item for donation\n"
+        "ℹ️ /instructions - How to use this bot\n\n"
+        "<i>💡 Simply click the 'Claim' button under any item in the channel to request it.</i>"
     )
     
     await update.message.reply_text(msg, parse_mode="HTML")
@@ -326,20 +324,17 @@ async def channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     instructions_text = (
-        "📚 *How It Works*\n\n"
-        "1. *List an Item* 📝\n"
-        "   - Use /newitem or click 'List New Item'\n"
-        "   - Follow the prompts to add details\n"
-        "   - Add a photo (optional but recommended)\n\n"
-        "2. *Claim an Item* 🛍️\n"
-        "   - Browse available items in the channel\n"
-        "   - Click 'Claim' and follow instructions\n\n"
-        "3. *After Claiming* ✅\n"
-        "   - The donor will approve/deny your request\n"
-        "   - Coordinate pickup details privately\n\n"
-        "4. *After Pickup* ♻️\n"
-        "   - Mark the item as claimed\n"
-        "   - Help us reduce waste!"
+        "ℹ️ <b>How It Works</b>\n\n"
+        "1. Use /newitem to post excess items.\n"
+        "2. Your item will appear in the Redistribution Channel.\n"
+        "3. Others can claim and coordinate pickup.\n"
+        "4. You'll be notified when someone claims your item.\n\n"
+        "<b>Important Notes:</b>\n"
+        "• The bot may experience occasional technical difficulties\n"
+        "• If the bot is unresponsive, please post directly in the channel\n"
+        "• Manual coordination may be needed if automated features fail\n"
+        "• Always double-check pickup details with the other party\n\n"
+        "To get started, just type: /newitem"
     )
     
     keyboard = [
@@ -367,33 +362,42 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def newitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the new item listing flow."""
+    # Clear any existing user data
+    context.user_data.clear()
+    
     await update.message.reply_text(
-        "📝 *Let's list a new item!*\n\n"
-        "What item would you like to list? (e.g., Pack of 10 masks, 3 boxes of gloves)",
+        "🏥 *CGH Surplus Redistribution*\n\n"
+        "📦 What item would you like to list?\n"
+        "Example: \"5x Boxes of Gloves\" or \"10x 500ml Hand Sanitizers\"\n\n"
+        "Please include the quantity and item name.",
         parse_mode="Markdown"
     )
     return ITEM
 
 async def ask_qty(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ask for the quantity of the item."""
+    """Store item name and ask for quantity."""
     context.user_data['item'] = update.message.text
     await update.message.reply_text(
-        "🔢 *How many items are available?*\n\n"
-        "Please enter a number (e.g., 5, 10, 100)",
+        "🔢 *Quantity Available*\n\n"
+        "How many of these items are available?\n"
+        "Example: \"5\" or \"10\"",
         parse_mode="Markdown"
     )
     return QTY
 
 async def ask_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ask for the size/quantity details."""
+    """Store quantity and ask for size/description."""
     try:
         qty = int(update.message.text)
         if qty <= 0:
             raise ValueError("Quantity must be positive")
         context.user_data['qty'] = qty
         await update.message.reply_text(
-            "📏 *What's the size/weight of each item?*\n\n"
-            "(e.g., 100ml, 500g, 1kg, Large, One Size)",
+            "📏 *Item Details*\n\n"
+            "Please provide more details about the item:\n"
+            "• Size (e.g., S/M/L/XL)\n"
+            "• Weight (e.g., 100g, 1kg)\n"
+            "• Or any other relevant details",
             parse_mode="Markdown"
         )
         return SIZE
@@ -404,40 +408,43 @@ async def ask_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return QTY
 
 async def ask_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ask for the expiry date."""
+    """Store size/description and ask for expiry."""
     context.user_data['size'] = update.message.text
     await update.message.reply_text(
-        "📅 *When does this item expire?*\n\n"
-        "You can enter:\n"
-        "• A date (e.g., 2023-12-31)\n"
-        "• A relative time (e.g., 'in 1 week', 'tomorrow')\n"
-        "• 'N/A' if not applicable",
+        "📅 *Expiry Date*\n\n"
+        "When does this item expire?\n"
+        "• Enter a date (DD/MM/YYYY or YYYY-MM-DD)\n"
+        "• Or type 'N/A' if not applicable\n\n"
+        "Example: 31/12/2023 or N/A",
         parse_mode="Markdown"
     )
     return EXPIRY
 
 async def handle_expiry_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the expiry date input and ask for location."""
+    """Store expiry and ask for location."""
     expiry_text = update.message.text.strip()
     context.user_data['expiry'] = expiry_text
     
     await update.message.reply_text(
-        "📍 *Where is this item located?*\n\n"
-        "Please enter the pickup location (e.g., 'CGH Main Lobby', 'Level 3 Pantry')",
+        "📍 *Pickup Location*\n\n"
+        "Where can the item be collected from?\n"
+        "Example: \"CGH Main Lobby\" or \"Level 3 Pantry, Tower A\"\n\n"
+        "Please be specific about the location within CGH.",
         parse_mode="Markdown"
     )
     return LOCATION
 
 async def ask_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ask the user to send a photo of the item."""
+    """Store location and ask for photo."""
     context.user_data['location'] = update.message.text
     
     keyboard = [[InlineKeyboardButton("Skip Photo", callback_data="skip_photo")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "📸 *Please send a photo of the item*\n\n"
-        "This helps others see the condition of the item. You can skip this step if needed.",
+        "📸 *Item Photo*\n\n"
+        "Please send a clear photo of the item. This helps others see the condition.\n\n"
+        "You can skip this step if needed.",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
