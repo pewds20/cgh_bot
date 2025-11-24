@@ -8,7 +8,7 @@
 # ==============================
 
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ParseMode
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -358,9 +358,13 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             instructions_text,
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+    return ConversationHandler.END
 
 # ========= NEW ITEM FLOW =========
-ITEM, QTY, SIZE, EXPIRY, LOCATION, PHOTO, CONFIRM = range(7)
+# States are already defined at the top of the file
 
 async def newitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the new item listing flow."""
@@ -662,6 +666,9 @@ suggest_conv = ConversationHandler(
 
 # ... (rest of the code remains the same)
 
+# Initialize the application
+app = Application.builder().token(BOT_TOKEN).build()
+
 # Add all handlers
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("instructions", instructions))
@@ -669,6 +676,16 @@ app.add_handler(CommandHandler("channel", channel))
 app.add_handler(CallbackQueryHandler(instructions, pattern="^(help_info|back_to_start)$"))
 app.add_handler(conv_handler)  # Add the main conversation handler
 app.add_handler(suggest_conv)
+async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle private messages that don't match any command."""
+    await update.message.reply_text(
+        "🤖 I'm the CGH Sustainability Bot! Here's what I can do:\n\n"
+        "• /start - Show the main menu\n"
+        "• /newitem - List a new item for donation\n"
+        "• /instructions - Learn how to use the bot\n"
+        "• /cancel - Cancel the current action"
+    )
+
 app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, private_message))
 # Add error handler
 app.add_error_handler(error_handler)
