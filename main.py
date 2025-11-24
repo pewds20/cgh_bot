@@ -1,11 +1,9 @@
 # ==============================
 # 🏥 Sustainability Redistribution Bot (Firebase + 24/7 Ready)
-# - Firebase persistent listings
-# - Calendar date selector
-# - Manual pickup time
-# - Live Remaining counter
-# - Auto archive + channel notification
-# - Flask keep-alive (for Koyeb)
+# - Stateless Firebase implementation
+# - Unique listing IDs
+# - Atomic operations
+# - Auto cleanup of old listings
 # ==============================
 
 from telegram import (
@@ -16,92 +14,140 @@ from telegram.ext import (
     CallbackQueryHandler, ConversationHandler,
     ContextTypes, filters
 )
-import os, datetime, calendar, json
+import os, datetime, calendar, json, time
 from pathlib import Path
 from flask import Flask
 from threading import Thread
 import firebase_admin
 from firebase_admin import credentials, db
+from firebase_admin.db import Reference
+from typing import Dict, Optional, Any, List, Tuple
 
 # ========= FIREBASE SETUP =========
-# ========= FIREBASE SETUP (ENVIRONMENT VARIABLE) =========
-import json
-from firebase_admin import credentials, db
-
-# Load Firebase credentials from environment variable instead of file
+# Load Firebase credentials from environment variable
 firebase_creds = json.loads(os.getenv("FIREBASE_CREDENTIALS"))
 cred = credentials.Certificate(firebase_creds)
 firebase_admin.initialize_app(cred, {
     "databaseURL": "https://cgh-telebot-default-rtdb.asia-southeast1.firebasedatabase.app/"
 })
 
-ref = db.reference("listings")
-LISTINGS = ref.get() or {}
+# Firebase references
+listings_ref = db.reference("listings")
+user_listings_ref = db.reference("user_listings")
 
-# Initialize Firebase reference
-ref = db.reference("listings")
+# Conversation states
+(ITEM, QTY, SIZE, EXPIRY, LOCATION, PHOTO, 
+ CONFIRM, SUGGEST) = range(8)
 
-# Global variable to store listings
-LISTINGS = {}
+# ========= UTILITY FUNCTIONS =========
+
+def get_listing(listing_id: str) -> Optional[Dict]:
+    """Get a single listing from Firebase."""
+    return listings_ref.child(listing_id).get()
+
+def update_listing(listing_id: str, updates: Dict) -> bool:
+    """Update a listing in Firebase atomically."""
+    try:
+        listings_ref.child(listing_id).update(updates)
+        return True
+    except Exception as e:
+        print(f"Error updating listing {listing_id}: {e}")
+        return False
+
+def create_listing(listing_data: Dict) -> Optional[str]:
+    """Create a new listing and return its ID."""
+    try:
+        listing_data.update({
+            "created_at": int(time.time()),
+            "status": "open",
+            "remaining": listing_data.get("qty", 1),
+            "claims": []
+        })
+        new_ref = listings_ref.push(listing_data)
+        return new_ref.key
+    except Exception as e:
+        print(f"Error creating listing: {e}")
+        return None
+
+def cleanup_expired_listings():
+    """Mark old listings as expired."""
+    try:
+        week_ago = int(time.time()) - (7 * 24 * 60 * 60)  # 7 days
+        
+        # Get all open listings
+        open_listings = listings_ref.order_by_child("status").equal_to("open").get() or {}
+        
+        for listing_id, listing in open_listings.items():
+            if not isinstance(listing, dict):
+                continue
+                
+            created = listing.get("created_at", 0)
+            if created < week_ago:
+                listings_ref.child(listing_id).update({"status": "expired"})
+                
+    except Exception as e:
+        print(f"Error in cleanup_expired_listings: {e}")
+
+def get_user_listings(user_id: str) -> Dict[str, Dict]:
+    """Get all listings for a specific user."""
+    return user_listings_ref.child(str(user_id)).get() or {}
+
+def add_claim(listing_id: str, user_id: int, qty: int, pickup_time: str) -> bool:
+    """Add a claim to a listing atomically."""
+    try:
+        # Use transaction to ensure atomic update
+        def transaction_update(data):
+            if not data or data.get("status") != "open":
+                return None  # Abort transaction
+                
+            remaining = data.get("remaining", 0)
+            if remaining < qty:
+                return None  # Not enough remaining
+                
+            # Update the data
+            data["remaining"] = remaining - qty
+            
+            # Add claim
+            if "claims" not in data:
+                data["claims"] = []
+            data["claims"].append({
+                "user_id": user_id,
+                "qty": qty,
+                "time": pickup_time,
+                "timestamp": int(time.time())
+            })
+            
+            # Update status if fully claimed
+            if data["remaining"] <= 0:
+                data["status"] = "claimed"
+                
+            return data
+            
+        # Run the transaction
+        listings_ref.child(listing_id).transaction(transaction_update)
+        return True
+        
+    except Exception as e:
+        print(f"Error in add_claim: {e}")
+        return False
 
 def refresh_listings():
-    """Refresh the LISTINGS dictionary from Firebase."""
-    global LISTINGS
-    try:
-        # Get both listings and user_listings
-        data = ref.get() or {}
-        user_listings = db.reference("user_listings").get() or {}
-        
-        # Merge user_listings into listings if they exist
-        if user_listings:
-            for user_id, listings in user_listings.items():
-                for msg_id, listing in listings.items():
-                    data[msg_id] = listing
-        
-        if data:
-            LISTINGS = data
-            print(f"🔄 Loaded {len(LISTINGS)} listings from Firebase.")
-        else:
-            LISTINGS = {}
-            print("ℹ️ No existing listings found in Firebase.")
-        return True
-    except Exception as e:
-        print(f"⚠️ Failed to load listings from Firebase: {e}")
-        return False
+    """Legacy function for backward compatibility."""
+    return True
 
 def save_listings():
-    """Save current LISTINGS dictionary to Firebase."""
-    try:
-        # Save to main listings
-        ref.set(LISTINGS)
-        
-        # Also maintain a separate index by user for reposting
-        user_listings = {}
-        for msg_id, listing in LISTINGS.items():
-            poster_id = listing.get('poster_id')
-            if poster_id:
-                if poster_id not in user_listings:
-                    user_listings[poster_id] = {}
-                user_listings[poster_id][msg_id] = listing
-        
-        # Save user listings index
-        db.reference("user_listings").set(user_listings)
-        
-        print(f"💾 Saved {len(LISTINGS)} listings to Firebase.")
-        return True
-    except Exception as e:
-        print(f"⚠️ Failed to save listings to Firebase: {e}")
-        return False
+    """Legacy function for backward compatibility."""
+    return True
 
 # ========= KEEP-ALIVE SERVER =========
 app_keepalive = Flask(__name__)
 
 @app_keepalive.route('/')
 def home():
-    return "Bot is alive!"
+    return "Bot is running!"
 
 def run():
-    app_keepalive.run(host='0.0.0.0', port=8000)
+    app_keepalive.run(host='0.0.0.0', port=8080)
 
 def keep_alive():
     t = Thread(target=run)
@@ -111,81 +157,57 @@ def keep_alive():
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8377427445:AAE-H_EiGAjs4NKE20v9S8zFLOv2AiHKcpU")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@Sustainability_Redistribution")
 
-ITEM, QTY, SIZE, EXPIRY, LOCATION, PHOTO, CONFIRM, SUGGEST = range(8)
-
-# Calendar functionality removed - using text input instead
-
-# ========= UPDATE CHANNEL POST =========
-async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, msg_id: int):
-    l = LISTINGS.get(msg_id)
-    if not l:
-        return
-
-    try:
-        if l["remaining"] <= 0:
-            text = (
-                f"🧾 <b>{l['item']}</b>\n"
-                f"✅ <b>Fully Claimed</b>\n"
-                f"📏 Size: {l['size']}\n"
-                f"⏰ Expiry: {l['expiry']}\n"
-                f"📍 {l['location']}"
-            )
-            try:
-                await context.bot.edit_message_caption(
-                    chat_id=CHANNEL_ID,
-                    message_id=msg_id,
-                    caption=text,
-                    parse_mode="HTML"
-                )
-            except Exception:
-                await context.bot.edit_message_text(
-                    chat_id=CHANNEL_ID,
-                    message_id=msg_id,
-                    text=text,
-                    parse_mode="HTML"
-                )
-
-            await context.bot.send_message(
-                CHANNEL_ID,
-                f"✅ <b>{l['item']}</b> is now fully claimed! 🎉\nThank you for participating ♻️",
-                parse_mode="HTML"
-            )
-            await context.bot.send_message(
-                l["poster_id"],
-                f"✅ Your item <b>{l['item']}</b> has been fully claimed and archived.",
-                parse_mode="HTML"
-            )
-            return
-
-        text = (
-            f"🧾 <b>{l['item']}</b>\n"
-            f"📦 Remaining: {l['remaining']} of {l['qty']}\n"
-            f"📏 Size: {l['size']}\n"
-            f"⏰ Expiry: {l['expiry']}\n"
-            f"📍 {l['location']}"
-        )
+# ========= CHANNEL POST UPDATER =========
+async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: str):
+    """Update the channel post with current listing status."""
+    listing = get_listing(listing_id)
+    if not listing:
+        return False
+    
+    # Create the message text
+    status_text = "✅ <b>Fully Claimed</b>" if listing.get("remaining", 0) <= 0 else f"📦 Available: {listing.get('remaining', 0)} of {listing.get('qty', 1)}"
+    
+    text = (
+        f"🧾 <b>{listing.get('item', 'Unknown Item')}</b>\n"
+        f"{status_text}\n"
+        f"📏 Size: {listing.get('size', 'N/A')}\n"
+        f"⏰ Expiry: {listing.get('expiry', 'N/A')}\n"
+        f"📍 {listing.get('location', 'N/A')}"
+    )
+    
+    # Create the appropriate keyboard
+    keyboard = None
+    if listing.get("status") == "open" and listing.get("remaining", 0) > 0:
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🤝 Claim", url=f"https://t.me/{context.bot.username}?start=claim_{msg_id}")
+            InlineKeyboardButton("🤝 Claim", callback_data=f"claim|{listing_id}")
         ]])
-
-        try:
+    
+    try:
+        message_id = listing.get("channel_message_id")
+        if not message_id:
+            return False
+            
+        # Check if the message has a photo
+        if listing.get("photo_id"):
             await context.bot.edit_message_caption(
                 chat_id=CHANNEL_ID,
-                message_id=msg_id,
+                message_id=message_id,
                 caption=text,
                 reply_markup=keyboard,
                 parse_mode="HTML"
             )
-        except Exception:
+        else:
             await context.bot.edit_message_text(
                 chat_id=CHANNEL_ID,
-                message_id=msg_id,
+                message_id=message_id,
                 text=text,
                 reply_markup=keyboard,
                 parse_mode="HTML"
             )
+        return True
     except Exception as e:
-        print(f"⚠️ Error updating post: {e}")
+        print(f"Error updating channel post: {e}")
+        return False
 
 # ========= CANCEL =========
 async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -419,106 +441,155 @@ async def confirm_post(update, context):
 async def post_to_channel(update, context):
     q = update.callback_query
     await q.answer()
-    d = context.user_data
-
+    
+    d = context.user_data['listing_data']
+    
     text = (
         f"🧾 <b>{d['item']}</b>\n"
-        f"📦 Quantity: {d['qty']}\n"
+        f"📦 Available: {d['qty']} available\n"
         f"📏 Size: {d['size']}\n"
         f"⏰ Expiry: {d['expiry']}\n"
         f"📍 {d['location']}"
     )
-
-    photo = d.get("photo")
-    if photo:
-        msg = await context.bot.send_photo(CHANNEL_ID, photo=photo, caption=text, parse_mode="HTML")
-    else:
-        msg = await context.bot.send_message(CHANNEL_ID, text, parse_mode="HTML")
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("🤝 Claim", url=f"https://t.me/{context.bot.username}?start=claim_{msg.message_id}")
-    ]])
-
-    try:
-        await context.bot.edit_message_caption(
-            chat_id=CHANNEL_ID, message_id=msg.message_id,
-            caption=text, reply_markup=keyboard, parse_mode="HTML"
-        )
-    except Exception:
-        await context.bot.edit_message_text(
-            chat_id=CHANNEL_ID, message_id=msg.message_id,
-            text=text, reply_markup=keyboard, parse_mode="HTML"
-        )
-
-    LISTINGS[msg.message_id] = {
-        "poster_id": q.from_user.id,
-        "poster_name": q.from_user.username,
+    
+    # Create the listing data for Firebase
+    listing_data = {
+        "poster_id": str(q.from_user.id),
+        "poster_name": q.from_user.username or q.from_user.full_name,
         "item": d["item"],
         "qty": int(d["qty"]),
         "remaining": int(d["qty"]),
         "size": d["size"],
         "expiry": d["expiry"],
         "location": d["location"],
-        "claims": []
+        "status": "open",
+        "timestamp": datetime.datetime.now().isoformat(),
+        "claims": {}
     }
-    save_listings()
-    await q.edit_message_text("✅ Posted to channel!")
-    return ConversationHandler.END
+    
+    # Add photo if available
+    if "photo" in d:
+        listing_data["photo_id"] = d["photo"]
+    
+    # Create the listing in Firebase and get the unique ID
+    listing_id = create_listing(listing_data)
+    if not listing_id:
+        await q.edit_message_text("❌ Failed to create listing. Please try again.")
+        return ConversationHandler.END
+    
+    # Create the claim button with the listing ID
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🤝 Claim", callback_data=f"claim|{listing_id}")
+    ]])
+    
+    # Post to channel
+    try:
+        if "photo" in d:
+            msg = await context.bot.send_photo(
+                chat_id=CHANNEL_ID,
+                photo=d["photo"],
+                caption=text,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+        else:
+            msg = await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=text,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+        
+        # Update the listing with the channel message ID
+        update_listing(listing_id, {"channel_message_id": msg.message_id})
+        
+        await q.edit_message_text("✅ Posted to channel!")
+        return ConversationHandler.END
+        
+    except Exception as e:
+        print(f"Error posting to channel: {e}")
+        # Clean up the listing if posting failed
+        db.reference(f"listings/{listing_id}").delete()
+        await q.edit_message_text("❌ Failed to post to channel. Please try again.")
+        return ConversationHandler.END
 
 # ========= CLAIM FLOW =========
 async def private_message(update, context):
-    # If this is a claim attempt from a deep link
-    if update.message and update.message.text and update.message.text.startswith("/start claim_"):
+    # If this is a claim attempt from a callback query (new way)
+    if update.callback_query and update.callback_query.data.startswith("claim|"):
         try:
-            # Get the message ID from the deep link
-            msg_id = update.message.text.split("_")[1]
-            print(f"Claim attempt for message ID: {msg_id}")
+            q = update.callback_query
+            await q.answer()
             
-            # Force refresh listings from Firebase
-            refresh_listings()
-            print(f"Current LISTINGS keys: {list(LISTINGS.keys())}")
+            # Get the listing ID from the callback data
+            listing_id = q.data.split("|")[1]
+            print(f"Claim attempt for listing ID: {listing_id}")
             
-            # Check if the listing exists in our current data
-            if msg_id not in LISTINGS:
-                print(f"Listing {msg_id} not found in LISTINGS, checking user_listings...")
-                # Try to find the listing in user_listings
-                user_listings = db.reference("user_listings").get() or {}
-                found = False
-                
-                # Search through all user listings
-                for uid, listings in user_listings.items():
-                    if msg_id in listings:
-                        # Found the listing, add it back to active listings
-                        LISTINGS[msg_id] = listings[msg_id]
-                        save_listings()
-                        found = True
-                        print(f"Found listing {msg_id} in user_listings, restored to active listings")
-                        break
-                
-                if not found:
-                    print(f"Listing {msg_id} not found anywhere")
-                    await update.message.reply_text(
-                        "⚠️ This listing is no longer available. "
-                        "Please ask the original poster to create a new listing."
-                    )
-                    return
+            # Get the listing from Firebase
+            listing = get_listing(listing_id)
+            if not listing:
+                await q.edit_message_text("❌ Sorry, this listing is no longer available or has expired.")
+                return ConversationHandler.END
             
-            # Now get the listing
-            l = LISTINGS[msg_id]
+            # Check if the item is still available
+            if listing.get("status") != "open" or listing.get("remaining", 0) <= 0:
+                await q.edit_message_text("❌ Sorry, this item has already been fully claimed.")
+                return ConversationHandler.END
             
-            if l.get("remaining", 0) <= 0:
-                await update.message.reply_text("❌ This listing has been fully claimed.")
-                return
-                
-            # Start the claim process
-            context.user_data["claiming_msg_id"] = msg_id
-            context.user_data["claim_step"] = "qty"
+            # Store the listing ID in user data for the claim flow
+            context.user_data["claim_listing_id"] = listing_id
             
-            await update.message.reply_text(
-                f"You're claiming <b>{l['item']}</b>.\n\n"
-                "📦 How many units would you like to collect?",
-                parse_mode="HTML"
+            # Ask for quantity
+            await q.edit_message_text(
+                f"How many of '{listing['item']}' would you like to claim? "
+                f"(Max: {listing['remaining']})",
+                reply_markup=None
             )
+            
+            return "CLAIM_QTY"
+            
+        except Exception as e:
+            print(f"Error handling claim callback: {e}")
+            if update.callback_query:
+                await update.callback_query.answer("❌ An error occurred. Please try again.", show_alert=True)
+            return ConversationHandler.END
+    
+    # Legacy support for deep links (can be removed after migration)
+    elif update.message and update.message.text and update.message.text.startswith("/start claim_"):
+        try:
+            # Get the listing ID from the deep link
+            listing_id = update.message.text.split("_")[1]
+            print(f"Legacy claim attempt for listing ID: {listing_id}")
+            
+            # Get the listing from Firebase
+            listing = get_listing(listing_id)
+            if not listing:
+                await update.message.reply_text("❌ Sorry, this listing is no longer available or has expired.")
+                return ConversationHandler.END
+            
+            # Check if the item is still available
+            if listing.get("status") != "open" or listing.get("remaining", 0) <= 0:
+                await update.message.reply_text("❌ Sorry, this item has already been fully claimed.")
+                return ConversationHandler.END
+            
+            # Store the listing ID in user data for the claim flow
+            context.user_data["claim_listing_id"] = listing_id
+            
+            # Ask for quantity
+            await update.message.reply_text(
+                f"How many of '{listing['item']}' would you like to claim? "
+                f"(Max: {listing['remaining']})"
+            )
+            
+            return "CLAIM_QTY"
+            
+        except Exception as e:
+            print(f"Error handling legacy claim deep link: {e}")
+            await update.message.reply_text("❌ An error occurred while processing your claim. Please try again.")
+            return ConversationHandler.END
+    
+    # Regular message (not a claim attempt)
+    return ConversationHandler.END
             return
             
         except Exception as e:
@@ -601,79 +672,109 @@ async def private_message(update, context):
 async def handle_claim_decision(update, context):
     q = update.callback_query
     await q.answer()
-    action, msg_id, user_id, qty, pickup_time = q.data.split("|")
-    msg_id, user_id, qty = int(msg_id), int(user_id), int(qty)
-    # Try to refresh from Firebase first
-    if not refresh_listings() or msg_id not in LISTINGS:
-        await q.edit_message_text(
-            "⚠️ This listing is no longer available in our system.\n\n"
-            "This might be because the bot was recently restarted. "
-            "The original poster will need to create a new listing."
-        )
-        return
-    l = LISTINGS[msg_id]
-
-    buyer = await context.bot.get_chat(user_id)
-
-    if action == "approve":
-        if l["remaining"] < qty:
-            await q.edit_message_text("⚠️ Not enough remaining stock to approve.")
-            return
-        
-        # Update the remaining quantity
-        l["remaining"] -= qty
-        
-        # Initialize claims list if it doesn't exist
-        if "claims" not in l:
-            l["claims"] = []
-            
-        # Add the claim
-        l["claims"].append({"user_id": user_id, "qty": qty, "time": pickup_time})
-        
-        # Save to Firebase
-        if not save_listings():
-            await q.edit_message_text("⚠️ Failed to save the updated listing. Please try again.")
+    
+    try:
+        # Parse the callback data
+        parts = q.data.split("|")
+        if len(parts) < 5:
+            await q.edit_message_text("⚠️ Invalid request format.")
             return
             
-        # Update the channel post
-        await update_channel_post(context, msg_id)
+        action, listing_id, user_id, qty, pickup_time = parts[0], parts[1], int(parts[2]), int(parts[3]), "|".join(parts[4:])
         
-        # Notify the buyer
+        # Get the listing from Firebase
+        listing = get_listing(listing_id)
+        if not listing:
+            await q.edit_message_text("⚠️ This listing is no longer available.")
+            return
+            
+        # Get buyer info
         try:
-            await context.bot.send_message(
-                user_id,
-                f"✅ Your claim for <b>{l['item']}</b> has been approved!\n\n"
-                f"📦 Quantity: <b>{qty}</b>\n"
-                f"⏰ Pickup: <b>{pickup_time}</b>\n"
-                f"📍 Location: <b>{l['location']}</b>",
-                parse_mode="HTML"
-            )
-            await q.edit_message_text(f"✅ Approved claim for @{buyer.username or buyer.first_name} ({qty}× {l['item']})")
+            buyer = await context.bot.get_chat(user_id)
         except Exception as e:
-            print(f"Error sending approval message: {e}")
-            await q.edit_message_text(f"✅ Approved claim for @{buyer.username or buyer.first_name} ({qty}× {l['item']})\n\n⚠️ Could not send message to buyer. They may have blocked the bot or deactivated their account.")
-
-    elif action == "reject":
-        await context.bot.send_message(
-            user_id,
-            f"❌ Your claim for <b>{l['item']}</b> has been rejected.",
-            parse_mode="HTML"
-        )
-        await q.edit_message_text(f"❌ Rejected claim for @{buyer.username or buyer.first_name}.")
-
-    elif action == "suggest":
-        # This is handled by the suggest_conv handler now
-        # Just acknowledge the callback to prevent "unanswered callback query" warnings
-        await q.answer()
-        await q.edit_message_text(
-            "📅 <b>Suggest a new pickup time:</b>\n\n"
-            "Please enter a new date and time in one of these formats:\n\n"
-            "• <code>25/12/2023 14:30</code>\n"
-            "• <code>Tomorrow 3pm</code>\n"
-            "• <code>Next Monday 10am</code>\n\n"
-            "The buyer will receive your suggested time and can accept or decline it.",
-            parse_mode="HTML"
-        )
+            print(f"Error getting buyer info: {e}")
+            await q.edit_message_text("⚠️ Could not retrieve buyer information.")
+            return
+        
+        if action == "approve":
+            # Add the claim atomically
+            success = add_claim(listing_id, user_id, qty, pickup_time)
+            
+            if success:
+                # Update the channel post to reflect the new remaining quantity
+                await update_channel_post(context, listing_id)
+                
+                # Notify the buyer
+                try:
+                    await context.bot.send_message(
+                        user_id,
+                        f"✅ Your claim for <b>{listing['item']}</b> has been approved!\n\n"
+                        f"📦 Quantity: <b>{qty}</b>\n"
+                        f"⏰ Pickup: <b>{pickup_time}</b>\n"
+                        f"📍 Location: <b>{listing['location']}</b>",
+                        parse_mode="HTML"
+                    )
+                    await q.edit_message_text(
+                        f"✅ Approved claim for @{buyer.username or buyer.first_name} ({qty}× {listing['item']})"
+                    )
+                except Exception as e:
+                    print(f"Error sending approval message: {e}")
+                    await q.edit_message_text(
+                        f"✅ Approved claim for @{buyer.username or buyer.first_name} ({qty}× {listing['item']})\n\n"
+                        "⚠️ Could not send message to buyer. They may have blocked the bot or deactivated their account."
+                    )
+            else:
+                await q.edit_message_text("⚠️ Failed to process the claim. Please try again.")
+                
+        elif action == "reject":
+            try:
+                await context.bot.send_message(
+                    user_id,
+                    f"❌ Your claim for <b>{listing['item']}</b> was not approved.\n\n"
+                    f"📦 Quantity: {qty}\n"
+                    f"⏰ Pickup time: {pickup_time}\n\n"
+                    "Please contact the poster directly if you have any questions.",
+                    parse_mode="HTML"
+                )
+                await q.edit_message_text(
+                    f"❌ Rejected claim for @{buyer.username or buyer.first_name}"
+                )
+            except Exception as e:
+                print(f"Error sending rejection message: {e}")
+                await q.edit_message_text(
+                    f"❌ Rejected claim for @{buyer.username or buyer.first_name}\n\n"
+                    "⚠️ Could not notify the buyer."
+                )
+                
+        elif action == "suggest":
+            # Store the claim details for the suggest time flow
+            context.user_data["suggest_claim"] = {
+                "listing_id": listing_id,
+                "user_id": user_id,
+                "qty": qty,
+                "original_time": pickup_time,
+                "message_id": q.message.message_id
+            }
+            
+            await q.edit_message_text(
+                f"🕓 Please suggest a new pickup time for @{buyer.username or buyer.first_name}'s claim.\n\n"
+                f"📦 {qty} × {listing['item']}\n"
+                f"⏰ Current time: {pickup_time}\n\n"
+                "Please type your suggested time:",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Cancel", callback_data=f"cancel_suggest|{listing_id}")]
+                ])
+            )
+            return "SUGGEST_TIME"
+            
+        elif action == "cancel_suggest":
+            await q.edit_message_text("⏭️ Time suggestion cancelled.")
+            
+    except Exception as e:
+        print(f"Error in handle_claim_decision: {e}")
+        import traceback
+        traceback.print_exc()
+        await q.edit_message_text("⚠️ An error occurred while processing your request. Please try again.")
 
 # ========= SUGGEST NEW DATE/TIME FLOW =========
 async def suggest_time(update, context):
@@ -681,19 +782,20 @@ async def suggest_time(update, context):
     await q.answer()
     
     try:
-        # Parse the callback data: suggest|{msg_id}|{user_id}|{qty}
+        # Parse the callback data: suggest|{listing_id}|{user_id}|{qty}|{current_time}
         parts = q.data.split('|')
-        if len(parts) < 4:
-            await q.edit_message_text("❌ Error: Invalid request. Please try again.")
+        if len(parts) < 5:
+            await q.edit_message_text("❌ Error: Invalid request format. Please try again.")
             return ConversationHandler.END
             
-        msg_id = parts[1]
+        listing_id = parts[1]
         buyer_id = parts[2]
         qty = parts[3]
+        current_time = '|'.join(parts[4:])
         
-        # Check if listing still exists and has stock
-        refresh_listings()
-        if msg_id not in LISTINGS or LISTINGS[msg_id].get('remaining', 0) <= 0:
+        # Get the listing from Firebase
+        listing = get_listing(listing_id)
+        if not listing or listing.get('status') != 'open' or listing.get('remaining', 0) <= 0:
             await q.edit_message_text("❌ This listing is no longer available.")
             return ConversationHandler.END
         
@@ -726,44 +828,44 @@ async def suggest_time(update, context):
 
 async def handle_suggest_time_text(update, context):
     proposed_time = update.message.text.strip()
-    msg_id = context.user_data.get("suggesting_for")
-    claim_info = context.user_data.get("claim_info", {})
     
-    # Clear the conversation state first to prevent duplicate messages
+    # Get the claim data from user_data
+    claim_data = context.user_data.get("suggest_claim")
+    if not claim_data:
+        await update.message.reply_text("❌ Error: Session expired. Please try again.")
+        return ConversationHandler.END
+    
+    listing_id = claim_data.get("listing_id")
+    buyer_id = claim_data.get("user_id")
+    qty = claim_data.get("qty", 1)
+    original_time = claim_data.get("original_time")
+    
+    # Clear the conversation state
     context.user_data.clear()
     
-    # Check if we have all required data
-    if not msg_id or not claim_info:
-        await update.message.reply_text("❌ Error: Session expired. Please try claiming the item again.")
+    # Get the listing from Firebase
+    listing = get_listing(listing_id)
+    if not listing or listing.get('status') != 'open' or listing.get('remaining', 0) < qty:
+        await update.message.reply_text("❌ This listing is no longer available or doesn't have enough stock.")
         return ConversationHandler.END
-    
-    # Check if the listing still exists and has stock
-    refresh_listings()
-    if msg_id not in LISTINGS or LISTINGS[msg_id].get('remaining', 0) <= 0:
-        await update.message.reply_text("❌ This listing is no longer available.")
-        return ConversationHandler.END
-    
-    l = LISTINGS[msg_id]
-    buyer_id = claim_info.get("buyer_id")
-    qty = claim_info.get("qty", 1)
-    original_msg_id = claim_info.get("original_msg_id")
     
     try:
         # Create the message with accept/decline buttons
         kb = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("✅ Accept", callback_data=f"accept_newtime|{msg_id}|{qty}|{proposed_time}"),
-                InlineKeyboardButton("❌ Decline", callback_data=f"decline_newtime|{msg_id}")
+                InlineKeyboardButton("✅ Accept", callback_data=f"accept_newtime|{listing_id}|{qty}|{proposed_time}"),
+                InlineKeyboardButton("❌ Decline", callback_data=f"decline_newtime|{listing_id}")
             ]
         ])
         
         # Format the message to the buyer
         msg = (
             "📌 <b>NEW PICKUP TIME SUGGESTED</b>\n\n"
-            f"🛍️ <b>Item:</b> {l['item']}\n"
+            f"🛍️ <b>Item:</b> {listing['item']}\n"
             f"📦 <b>Quantity:</b> {qty}\n"
-            f"📅 <b>Proposed Pickup Time:</b> {proposed_time}\n"
-            f"📍 <b>Location:</b> {l['location']}\n\n"
+            f"📅 <b>Original Pickup Time:</b> {original_time}\n"
+            f"📅 <b>Proposed New Time:</b> {proposed_time}\n"
+            f"📍 <b>Location:</b> {listing['location']}\n\n"
             "Please accept or decline this new pickup time:"
         )
         
@@ -783,8 +885,10 @@ async def handle_suggest_time_text(update, context):
             )
             
         except Exception as e:
+            print(f"Error sending message to buyer: {e}")
             await update.message.reply_text(
-                "❌ Failed to send the suggestion. Please try again later."
+                "❌ Failed to send the suggestion. The buyer may have started a conversation with the bot. "
+                "Please ask them to start a chat with @CGH_Redistribute_Bot and try again."
             )
             
     except Exception as e:
@@ -795,78 +899,101 @@ async def handle_suggest_time_text(update, context):
             "❌ An error occurred while sending the suggestion. Please try again."
         )
         
-    context.user_data.clear()
     return ConversationHandler.END
 
 async def handle_newtime_reply(update, context):
     q = update.callback_query
     await q.answer()
-    parts = q.data.split("|")
-    action = parts[0]
-    msg_id = parts[1]  # Keep as string to match LISTINGS keys
     
-    # Check if listing still exists and has stock
-    refresh_listings()
-    if msg_id not in LISTINGS or LISTINGS[msg_id].get('remaining', 0) <= 0:
-        await q.edit_message_text("❌ This listing is no longer available.")
-        return
+    try:
+        parts = q.data.split("|")
+        if len(parts) < 2:
+            await q.edit_message_text("❌ Invalid request format.")
+            return
+            
+        action = parts[0]
+        listing_id = parts[1]
         
-    l = LISTINGS[msg_id]
-    
-    if action == "accept_newtime":
-        qty = int(parts[2])
-        new_time = parts[3]
-        
-        # Update the listing with the new time
-        l['pickup_time'] = new_time
-        save_listings()
-        
-        try:
-            # Try to edit the original message to remove the buttons
-            await context.bot.edit_message_reply_markup(
-                chat_id=q.message.chat_id,
-                message_id=q.message.message_id,
-                reply_markup=None
+        # Get the listing from Firebase
+        listing = get_listing(listing_id)
+        if not listing or listing.get('status') != 'open':
+            await q.edit_message_text("❌ This listing is no longer available.")
+            return
+            
+        if action == "accept_newtime":
+            if len(parts) < 4:
+                await q.edit_message_text("❌ Invalid request format.")
+                return
+                
+            qty = int(parts[2])
+            new_time = parts[3]
+            
+            # Update the claim in Firebase with the new time
+            claims = listing.get('claims', {})
+            for claim_id, claim in claims.items():
+                if str(claim.get('user_id')) == str(q.from_user.id):
+                    # Update the claim with the new time
+                    claims[claim_id]['pickup_time'] = new_time
+                    update_listing(listing_id, {'claims': claims})
+                    break
+            
+            try:
+                # Remove the buttons from the message
+                await q.edit_message_reply_markup(reply_markup=None)
+            except Exception as e:
+                print(f"Could not edit message: {e}")
+            
+            # Notify the seller
+            try:
+                await context.bot.send_message(
+                    listing['poster_id'],
+                    f"✅ Buyer has accepted the new pickup time: {new_time}\n\n"
+                    f"🛍️ Item: {listing['item']}\n"
+                    f"📦 Quantity: {qty}\n"
+                    f"📍 Location: {listing['location']}"
+                )
+            except Exception as e:
+                print(f"Could not notify seller: {e}")
+            
+            # Update the buyer
+            await q.message.reply_text(
+                f"✅ You've accepted the new pickup time: {new_time}\n\n"
+                f"🛍️ Item: {listing['item']}\n"
+                f"📦 Quantity: {qty}\n"
+                f"📍 Location: {listing['location']}\n\n"
+                "The seller has been notified. Thank you!"
             )
-        except Exception as e:
-            print(f"Could not edit message: {e}")
-        
-        # Notify the seller
-        await context.bot.send_message(
-            l['poster_id'],
-            f"✅ Buyer has accepted the new pickup time: {new_time}\n\n"
-            f"🛍️ Item: {l['item']}\n"
-            f"📦 Quantity: {qty}\n"
-            f"📍 Location: {l['location']}"
-        )
-        
-        # Update the buyer
-        await q.message.reply_text(
-            f"✅ You've accepted the new pickup time: {new_time}\n\n"
-            f"🛍️ Item: {l['item']}\n"
-            f"📦 Quantity: {qty}\n"
-            f"📍 Location: {l['location']}\n\n"
-            "The seller has been notified. Thank you!"
-        )
-        
-    elif action == "decline_newtime":
-        try:
-            # Try to edit the original message to remove the buttons
-            await context.bot.edit_message_reply_markup(
-                chat_id=q.message.chat_id,
-                message_id=q.message.message_id,
-                reply_markup=None
+            
+        elif action == "decline_newtime":
+            try:
+                # Remove the buttons from the message
+                await q.edit_message_reply_markup(reply_markup=None)
+            except Exception as e:
+                print(f"Could not edit message: {e}")
+            
+            await q.message.reply_text("❌ You've declined the suggested pickup time.")
+            
+            # Notify the seller
+            try:
+                await context.bot.send_message(
+                chat_id=listing.get('poster_id'),
+                text=f"❌ The buyer has declined your suggested pickup time for {listing.get('item', 'the item')}."
             )
-        except Exception as e:
-            print(f"Could not edit message: {e}")
-        
-        await q.message.reply_text("❌ You've declined the suggested pickup time.")
-        
-        # Notify the seller
-        await context.bot.send_message(
-            l.get('poster_id'),
-            f"❌ The buyer has declined your suggested pickup time for {l.get('item', 'the item')}."
-        )
+            
+    except Exception as e:
+        print(f"Error in handle_newtime_reply: {e}")
+        import traceback
+        print(traceback.format_exc())
+        try:
+            await q.edit_message_text("❌ An error occurred while processing your request. Please try again.")
+        except:
+            try:
+                await context.bot.send_message(
+                    chat_id=q.from_user.id,
+                    text="❌ An error occurred while processing your request. Please try again."
+                )
+            except:
+                pass
 
 # ========= REPOST HANDLERS =========
 async def handle_repost(update: Update, context: ContextTypes.DEFAULT_TYPE):
