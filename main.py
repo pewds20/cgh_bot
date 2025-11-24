@@ -479,36 +479,66 @@ async def confirm_post(update, context):
         "location": context.user_data['location'],
         "photo": context.user_data.get('photo')
     }
-    
+
     # Store in both user_data and chat_data
     context.user_data['listing_data'] = listing_data
     context.chat_data['listing_data'] = listing_data
+
+    # If this is a callback query (button press), edit the message
+    if update.callback_query:
+        q = update.callback_query
+        await q.answer()
+        
+        # Create the preview message
+        preview = (
+            f"🧾 <b>{listing_data['item']}</b>\n"
+            f"📦 Available: {listing_data['qty']} available\n"
+            f"📏 Size: {listing_data['size']}\n"
+            f"⏰ Expiry: {listing_data['expiry']}\n"
+            f"📍 Location: {listing_data['location']}\n\n"
+            "Would you like to post this to the channel?"
+        )
+        buttons = [
+            [InlineKeyboardButton("✅ Post", callback_data="confirm_post")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_post")]
+        ]
+        
+        # Check if there's a photo to include
+        if 'photo' in listing_data and listing_data['photo']:
+            await q.message.reply_photo(
+                photo=listing_data['photo'],
+                caption=preview,
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode="HTML"
+            )
+        else:
+            await q.message.reply_text(
+                preview,
+                reply_markup=InlineKeyboardMarkup(buttons),
+                parse_mode="HTML"
+            )
     
-    # Create the preview message
-    preview = (
-        f"🧾 <b>{listing_data['item']}</b>\n"
-        f"📦 Available: {listing_data['qty']} available\n"
-        f"📏 Size: {listing_data['size']}\n"
-        f"⏰ Expiry: {listing_data['expiry']}\n"
-        f"📍 Location: {listing_data['location']}\n\n"
-        "Would you like to post this to the channel?"
-    )
-    buttons = [[
-        InlineKeyboardButton("✅ Post", callback_data="confirm_post"),
-        InlineKeyboardButton("❌ Cancel", callback_data="cancel_post")
-    ]]
-    await update.message.reply_text(preview, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
     return CONFIRM
 
 async def post_to_channel(update, context):
     q = update.callback_query
     await q.answer()
     
-    # Try to get listing_data from user_data first, then from chat_data
+    # Try to get listing_data from user_data first, then from chat_data, or reconstruct from individual fields
     if 'listing_data' in context.user_data:
         d = context.user_data['listing_data']
     elif 'listing_data' in context.chat_data:
         d = context.chat_data['listing_data']
+    elif all(key in context.user_data for key in ['item', 'qty', 'location']):
+        # Reconstruct listing_data from individual fields if needed
+        d = {
+            'item': context.user_data['item'],
+            'qty': context.user_data['qty'],
+            'size': context.user_data.get('size', 'N/A'),
+            'expiry': context.user_data.get('expiry', 'N/A'),
+            'location': context.user_data['location'],
+            'photo': context.user_data.get('photo')
+        }
     else:
         await q.edit_message_text("❌ Error: Could not find listing data. Please try creating a new listing with /newitem")
         return ConversationHandler.END
