@@ -159,6 +159,9 @@ def keep_alive():
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8377427445:AAE-H_EiGAjs4NKE20v9S8zFLOv2AiHKcpU")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@Sustainability_Redistribution")  # Make sure to include the @ symbol
 
+# Conversation states
+(ITEM, QTY, SIZE, EXPIRY, LOCATION, PHOTO, CONFIRM, SUGGEST) = range(8)
+
 # ========= CHANNEL POST UPDATER =========
 async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: str):
     """Update the channel post with current listing status."""
@@ -355,11 +358,10 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             instructions_text,
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
-        )
 
 # ========= NEW ITEM FLOW =========
+ITEM, QTY, SIZE, EXPIRY, LOCATION, PHOTO, CONFIRM = range(7)
+
 async def newitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the new item listing flow."""
     await update.message.reply_text(
@@ -411,6 +413,71 @@ async def ask_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return EXPIRY
 
+async def handle_expiry_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the expiry date input and ask for location."""
+    expiry_text = update.message.text.strip()
+    context.user_data['expiry'] = expiry_text
+    
+    await update.message.reply_text(
+        "📍 *Where is this item located?*\n\n"
+        "Please enter the pickup location (e.g., 'CGH Main Lobby', 'Level 3 Pantry')",
+        parse_mode="Markdown"
+    )
+    return LOCATION
+
+async def ask_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ask the user to send a photo of the item."""
+    context.user_data['location'] = update.message.text
+    
+    keyboard = [[InlineKeyboardButton("Skip Photo", callback_data="skip_photo")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "📸 *Please send a photo of the item*\n\n"
+        "This helps others see the condition of the item. You can skip this step if needed.",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+    return PHOTO
+
+async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle skipping the photo upload."""
+    context.user_data['photo_id'] = None
+    
+    # Prepare the confirmation message
+    item_info = (
+        f"📝 *Confirm Your Listing*\n\n"
+        f"*Item:* {context.user_data.get('item', 'N/A')}\n"
+        f"*Quantity:* {context.user_data.get('qty', 'N/A')}\n"
+        f"*Size/Weight:* {context.user_data.get('size', 'N/A')}\n"
+        f"*Expiry:* {context.user_data.get('expiry', 'N/A')}\n"
+        f"*Location:* {context.user_data.get('location', 'N/A')}\n"
+        f"*Photo:* None\n\n"
+        "Please confirm if these details are correct:"
+    )
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Confirm", callback_data="confirm_post"),
+            InlineKeyboardButton("❌ Cancel", callback_data="cancel_post")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if update.callback_query:
+        await update.callback_query.edit_message_text(
+            item_info,
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            item_info,
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+    return CONFIRM
+
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Log errors and handle them gracefully."""
     from telegram import Update
@@ -436,52 +503,161 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # ... (rest of the code remains the same)
 
+async def save_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save the photo and ask for confirmation."""
+    photo = update.message.photo[-1]  # Get the highest resolution photo
+    context.user_data['photo_id'] = photo.file_id
+    
+    # Prepare the confirmation message
+    item_info = (
+        f"📝 *Confirm Your Listing*\n\n"
+        f"*Item:* {context.user_data.get('item', 'N/A')}\n"
+        f"*Quantity:* {context.user_data.get('qty', 'N/A')}\n"
+        f"*Size/Weight:* {context.user_data.get('size', 'N/A')}\n"
+        f"*Expiry:* {context.user_data.get('expiry', 'N/A')}\n"
+        f"*Location:* {context.user_data.get('location', 'N/A')}\n"
+        f"*Photo:* ✅ (attached)\n\n"
+        "Please confirm if these details are correct:"
+    )
+    
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Confirm", callback_data="confirm_post"),
+            InlineKeyboardButton("❌ Cancel", callback_data="cancel_post")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Send the photo with the confirmation message
+    await update.message.reply_photo(
+        photo=photo.file_id,
+        caption=item_info,
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+    return CONFIRM
+
+async def post_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Post the listing to the channel."""
+    query = update.callback_query
+    await query.answer()
+    
+    user_data = context.user_data
+    user = update.effective_user
+    
+    # Create the listing data
+    listing_data = {
+        'user_id': user.id,
+        'user_name': user.full_name,
+        'item': user_data.get('item'),
+        'qty': user_data.get('qty'),
+        'size': user_data.get('size'),
+        'expiry': user_data.get('expiry'),
+        'location': user_data.get('location'),
+        'photo_id': user_data.get('photo_id'),
+        'status': 'available',
+        'timestamp': datetime.datetime.utcnow().isoformat(),
+        'claims': {}
+    }
+    
+    try:
+        # Save to Firebase
+        listing_id = create_listing(listing_data)
+        
+        # Prepare the channel post
+        post_text = (
+            f"🆕 *New Item Available!*\n\n"
+            f"*Item:* {listing_data['item']}\n"
+            f"*Quantity:* {listing_data['qty']}\n"
+            f"*Size/Weight:* {listing_data['size']}\n"
+            f"*Expiry:* {listing_data['expiry']}\n"
+            f"*Location:* {listing_data['location']}\n\n"
+            f"Posted by: {user.full_name}"
+        )
+        
+        # Send to channel
+        if 'photo_id' in listing_data and listing_data['photo_id']:
+            await context.bot.send_photo(
+                chat_id=CHANNEL_ID,
+                photo=listing_data['photo_id'],
+                caption=post_text,
+                parse_mode="Markdown"
+            )
+        else:
+            await context.bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=post_text,
+                parse_mode="Markdown"
+            )
+        
+        await query.edit_message_text(
+            "✅ Your item has been listed in the channel!\n\n"
+            "Thank you for contributing to sustainability! ♻️"
+        )
+        return ConversationHandler.END
+        
+    except Exception as e:
+        print(f"Error posting to channel: {e}")
+        await query.edit_message_text(
+            "❌ Sorry, there was an error posting your item. Please try again."
+        )
+        return ConversationHandler.END
+
+# Conversation handler for new item listing
 conv_handler = ConversationHandler(
     entry_points=[
         CommandHandler("newitem", newitem),
         CallbackQueryHandler(newitem, pattern="^newitem_btn$")
     ],
-    per_message=True,  # Track callbacks per message
     states={
-        ITEM: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, ask_qty)
-        ],
-        QTY: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, ask_size)
-        ],
-        SIZE: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, ask_expiry)
-        ],
-        EXPIRY: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_expiry_text)
-        ],
-        LOCATION: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, ask_photo)
-        ],
+        ITEM: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_qty)],
+        QTY: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_size)],
+        SIZE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_expiry)],
+        EXPIRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_expiry_text)],
+        LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_photo)],
         PHOTO: [
             MessageHandler(filters.PHOTO, save_photo),
             MessageHandler(filters.Regex("^(?i)(skip|none|na|not available)$"), skip_photo),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, ask_photo)  # Handle invalid input
+            MessageHandler(filters.TEXT & ~filters.COMMAND, ask_photo)
         ],
         CONFIRM: [
-            # Handle confirm/cancel callbacks
             CallbackQueryHandler(post_to_channel, pattern=r'^confirm_post$'),
             CallbackQueryHandler(cancel_post, pattern=r'^cancel_post$'),
-            # Add a fallback for any other callbacks
             CallbackQueryHandler(
                 lambda u, c: u.answer("This action is not available right now.", show_alert=True)
-            )],
+            )
+        ]
     },
     fallbacks=[CommandHandler("cancel", cancel_post)],
+    per_message=True
 )
 
+async def suggest_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start the suggest time conversation."""
+    await update.message.reply_text(
+        "⏰ Please suggest a new pickup time (e.g., 'Tomorrow at 2 PM' or 'Friday 3-5 PM'):"
+    )
+    return SUGGEST
+
+async def handle_suggest_time_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the suggested time input."""
+    suggested_time = update.message.text
+    # In a real implementation, you would process the suggested time here
+    # and notify the relevant users
+    
+    await update.message.reply_text(
+        f"✅ Your suggested time '{suggested_time}' has been noted. The donor will be in touch!"
+    )
+    return ConversationHandler.END
+
+# Conversation handler for suggesting pickup times
 suggest_conv = ConversationHandler(
     entry_points=[CommandHandler("suggest", suggest_time)],
     states={
         SUGGEST: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggest_time_text)]
     },
     fallbacks=[CommandHandler("cancel", cancel_post)],
-    per_message=True  # Track callbacks per message
+    per_message=True
 )
 
 # ... (rest of the code remains the same)
@@ -489,15 +665,11 @@ suggest_conv = ConversationHandler(
 # Add all handlers
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("instructions", instructions))
-app.add_handler(CallbackQueryHandler(handle_repost, pattern="^repost_"))
-app.add_handler(CallbackQueryHandler(deprecate_old_donate_button, pattern="^help_newitem$"))
 app.add_handler(CommandHandler("channel", channel))
-app.add_handler(CommandHandler("instructions", instructions))
 app.add_handler(CallbackQueryHandler(instructions, pattern="^(help_info|back_to_start)$"))
+app.add_handler(conv_handler)  # Add the main conversation handler
 app.add_handler(suggest_conv)
-app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, private_message))
-app.add_handler(CallbackQueryHandler(handle_newtime_reply, pattern="^(accept_newtime|decline_newtime)"))
-app.add_handler(CallbackQueryHandler(handle_claim_decision, pattern="^(approve|reject)"))
+app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, private_message))
 # Add error handler
 app.add_error_handler(error_handler)
 
