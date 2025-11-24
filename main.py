@@ -321,40 +321,13 @@ async def channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📣 Open Channel", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")]])
     await update.message.reply_text("Open the redistribution channel:", reply_markup=keyboard)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # If it's a deep link for claiming an item
-    if context.args and context.args[0].startswith('claim_'):
-        # ... (rest of the start function remains the same)
-        return
-        
-    # Regular start command
-    target = update.message or update.callback_query.message
-    keyboard = [
-        [InlineKeyboardButton("📦 List New Item", callback_data="newitem_btn")],
-        [InlineKeyboardButton("❓ Instructions", callback_data="help_info")]
-    ]
-    
-    msg = (
-        "🤖 <b>Welcome to the Sustainability Redistribution Bot!</b>\n\n"
-        "This bot helps you list and claim items for redistribution within the community.\n\n"
-        "<b>Available Commands:</b>\n"
-        "• /newitem - List a new item for donation\n"
-        "• /channel - View the redistribution channel\n"
-        "• /instructions - How to use this bot\n\n"
-        "<b>Or use the buttons below:</b>"
-    )
-    
-    await target.reply_text(
-        msg, 
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
 
 async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     instructions_text = (
         "📚 *How It Works*\n\n"
         "1. *List an Item* 📝\n"
-        "   - Use /newitem or click 'List New Item'\n"        "   - Follow the prompts to add details\n"
+        "   - Use /newitem or click 'List New Item'\n"
+        "   - Follow the prompts to add details\n"
         "   - Add a photo (optional but recommended)\n\n"
         "2. *Claim an Item* 🛍️\n"
         "   - Browse available items in the channel\n"
@@ -385,6 +358,81 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup,
             parse_mode="Markdown"
         )
+
+# ========= NEW ITEM FLOW =========
+async def newitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start the new item listing flow."""
+    await update.message.reply_text(
+        "📝 *Let's list a new item!*\n\n"
+        "What item would you like to list? (e.g., Pack of 10 masks, 3 boxes of gloves)",
+        parse_mode="Markdown"
+    )
+    return ITEM
+
+async def ask_qty(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ask for the quantity of the item."""
+    context.user_data['item'] = update.message.text
+    await update.message.reply_text(
+        "🔢 *How many items are available?*\n\n"
+        "Please enter a number (e.g., 5, 10, 100)",
+        parse_mode="Markdown"
+    )
+    return QTY
+
+async def ask_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ask for the size/quantity details."""
+    try:
+        qty = int(update.message.text)
+        if qty <= 0:
+            raise ValueError("Quantity must be positive")
+        context.user_data['qty'] = qty
+        await update.message.reply_text(
+            "📏 *What's the size/weight of each item?*\n\n"
+            "(e.g., 100ml, 500g, 1kg, Large, One Size)",
+            parse_mode="Markdown"
+        )
+        return SIZE
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Please enter a valid positive number for quantity."
+        )
+        return QTY
+
+async def ask_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ask for the expiry date."""
+    context.user_data['size'] = update.message.text
+    await update.message.reply_text(
+        "📅 *When does this item expire?*\n\n"
+        "You can enter:\n"
+        "• A date (e.g., 2023-12-31)\n"
+        "• A relative time (e.g., 'in 1 week', 'tomorrow')\n"
+        "• 'N/A' if not applicable",
+        parse_mode="Markdown"
+    )
+    return EXPIRY
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log errors and handle them gracefully."""
+    from telegram import Update
+    from telegram.constants import ParseMode
+    
+    # Log the error
+    print(f"Error: {context.error}")
+    
+    # Send a message to the user
+    error_msg = (
+        "❌ *An error occurred*\n\n"
+        "Sorry, something went wrong while processing your request. "
+        "The error has been logged and will be investigated.\n\n"
+        "Please try again or use /cancel to start over."
+    )
+    
+    if isinstance(update, Update) and update.effective_message:
+        await update.effective_message.reply_text(
+            error_msg,
+            parse_mode=ParseMode.MARKDOWN
+        )
+
 
 # ... (rest of the code remains the same)
 
@@ -453,10 +501,7 @@ app.add_handler(CallbackQueryHandler(handle_claim_decision, pattern="^(approve|r
 # Add error handler
 app.add_error_handler(error_handler)
 
-# Run the bot
-print("🤖 Bot is running...")
-app.run_polling()
-
+# Set up command menu
 async def set_commands(app):
     await app.bot.set_my_commands([
         BotCommand("start", "Show main menu"),
@@ -464,6 +509,7 @@ async def set_commands(app):
         BotCommand("instructions", "How the bot works"),
         BotCommand("cancel", "Cancel current action"),
     ])
+
 app.post_init = set_commands
 
 print("🤖 Bot starting with Firebase persistence + keep-alive + auto-archive ...")
