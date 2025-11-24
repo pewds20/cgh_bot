@@ -1208,13 +1208,13 @@ conv_handler = ConversationHandler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, ask_photo)  # Handle invalid input
         ],
         CONFIRM: [
-            CallbackQueryHandler(post_to_channel, pattern="^confirm_post$"),
-            CallbackQueryHandler(cancel_post, pattern="^cancel_post$"),
-            CallbackQueryHandler(lambda u, c: None),  # Ignore other callbacks
-            MessageHandler(filters.TEXT & ~filters.COMMAND, 
-                         lambda update, context: update.message.reply_text(
-                             "Please use the buttons to confirm or cancel the post."
-                         ))],
+            # Handle confirm/cancel callbacks
+            CallbackQueryHandler(post_to_channel, pattern=r'^confirm_post$'),
+            CallbackQueryHandler(cancel_post, pattern=r'^cancel_post$'),
+            # Add a fallback for any other callbacks
+            CallbackQueryHandler(
+                lambda u, c: u.answer("This action is not available right now.", show_alert=True)
+            )],
     },
     fallbacks=[CommandHandler("cancel", cancel_post)],
 )
@@ -1226,7 +1226,13 @@ suggest_conv = ConversationHandler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggest_time_text)
         ]
     },
-    fallbacks=[CommandHandler("cancel", cancel_post)],
+    fallbacks=[
+        CommandHandler("cancel", cancel_post),
+        CallbackQueryHandler(
+            lambda u, c: u.answer("Please enter a new suggested time or /cancel")
+        )
+    ],
+    per_message=False
 )
 
 # ========= APP SETUP =========
