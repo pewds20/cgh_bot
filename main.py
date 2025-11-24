@@ -424,13 +424,27 @@ async def skip_photo(update, context):
     return CONFIRM
 
 async def confirm_post(update, context):
-    d = context.user_data
+    # Store the listing data in context.chat_data for persistence
+    if 'listing_data' not in context.user_data:
+        await update.message.reply_text("❌ Error: Listing data not found. Please start over with /newitem")
+        return ConversationHandler.END
+        
+    # Store the data in chat_data for persistence across steps
+    context.chat_data['listing_data'] = {
+        "item": context.user_data['item'],
+        "qty": context.user_data['qty'],
+        "size": context.user_data['size'],
+        "expiry": context.user_data['expiry'],
+        "location": context.user_data['location'],
+        "photo": context.user_data['photo']
+    }
+    
     preview = (
-        f"🧾 <b>{d['item']}</b>\n"
-        f"📦 Quantity: {d['qty']}\n"
-        f"📏 Size: {d['size']}\n"
-        f"⏰ Expiry: {d['expiry']}\n"
-        f"📍 Location: {d['location']}\n\n"
+        f"🧾 <b>{context.chat_data['listing_data']['item']}</b>\n"
+        f"📦 Available: {context.chat_data['listing_data']['qty']} available\n"
+        f"📏 Size: {context.chat_data['listing_data']['size']}\n"
+        f"⏰ Expiry: {context.chat_data['listing_data']['expiry']}\n"
+        f"📍 Location: {context.chat_data['listing_data']['location']}\n\n"
         "Would you like to post this to the channel?"
     )
     buttons = [[
@@ -444,7 +458,14 @@ async def post_to_channel(update, context):
     q = update.callback_query
     await q.answer()
     
-    d = context.user_data['listing_data']
+    # Try to get listing_data from user_data first, then from chat_data
+    if 'listing_data' in context.user_data:
+        d = context.user_data['listing_data']
+    elif 'listing_data' in context.chat_data:
+        d = context.chat_data['listing_data']
+    else:
+        await q.edit_message_text("❌ Error: Could not find listing data. Please try creating a new listing with /newitem")
+        return ConversationHandler.END
     
     text = (
         f"🧾 <b>{d['item']}</b>\n"
@@ -486,7 +507,12 @@ async def post_to_channel(update, context):
     
     # Post to channel
     try:
+        print(f"Attempting to post to channel: {CHANNEL_ID}")
+        print(f"Listing ID: {listing_id}")
+        print(f"Has photo: {'photo' in d}")
+        
         if "photo" in d:
+            print(f"Photo ID: {d['photo']}")
             msg = await context.bot.send_photo(
                 chat_id=CHANNEL_ID,
                 photo=d["photo"],
@@ -495,6 +521,7 @@ async def post_to_channel(update, context):
                 parse_mode="HTML"
             )
         else:
+            print("No photo, sending text message")
             msg = await context.bot.send_message(
                 chat_id=CHANNEL_ID,
                 text=text,
@@ -502,17 +529,31 @@ async def post_to_channel(update, context):
                 parse_mode="HTML"
             )
         
+        print(f"Message sent successfully, message_id: {msg.message_id}")
+        
         # Update the listing with the channel message ID
         update_listing(listing_id, {"channel_message_id": msg.message_id})
+        print("Listing updated with channel message ID")
         
         await q.edit_message_text("✅ Posted to channel!")
         return ConversationHandler.END
         
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
         print(f"Error posting to channel: {e}")
+        print(f"Error details: {error_details}")
+        print(f"CHANNEL_ID: {CHANNEL_ID}")
+        print(f"Listing data: {listing_data}")
+        
         # Clean up the listing if posting failed
-        db.reference(f"listings/{listing_id}").delete()
-        await q.edit_message_text("❌ Failed to post to channel. Please try again.")
+        try:
+            db.reference(f"listings/{listing_id}").delete()
+            print(f"Cleaned up listing {listing_id}")
+        except Exception as cleanup_error:
+            print(f"Error during cleanup: {cleanup_error}")
+            
+        await q.edit_message_text("❌ Failed to post to channel. Please try again. If the problem persists, please contact support with this error: " + str(e)[:100])
         return ConversationHandler.END
 
 # ========= CLAIM FLOW =========
