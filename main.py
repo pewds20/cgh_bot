@@ -424,27 +424,32 @@ async def skip_photo(update, context):
     return CONFIRM
 
 async def confirm_post(update, context):
-    # Store the listing data in context.chat_data for persistence
-    if 'listing_data' not in context.user_data:
+    # Store the listing data in both user_data and chat_data for reliability
+    if 'item' not in context.user_data:
         await update.message.reply_text("❌ Error: Listing data not found. Please start over with /newitem")
         return ConversationHandler.END
         
-    # Store the data in chat_data for persistence across steps
-    context.chat_data['listing_data'] = {
+    # Prepare the listing data
+    listing_data = {
         "item": context.user_data['item'],
         "qty": context.user_data['qty'],
-        "size": context.user_data['size'],
-        "expiry": context.user_data['expiry'],
+        "size": context.user_data.get('size', 'N/A'),
+        "expiry": context.user_data.get('expiry', 'N/A'),
         "location": context.user_data['location'],
-        "photo": context.user_data['photo']
+        "photo": context.user_data.get('photo')
     }
     
+    # Store in both user_data and chat_data
+    context.user_data['listing_data'] = listing_data
+    context.chat_data['listing_data'] = listing_data
+    
+    # Create the preview message
     preview = (
-        f"🧾 <b>{context.chat_data['listing_data']['item']}</b>\n"
-        f"📦 Available: {context.chat_data['listing_data']['qty']} available\n"
-        f"📏 Size: {context.chat_data['listing_data']['size']}\n"
-        f"⏰ Expiry: {context.chat_data['listing_data']['expiry']}\n"
-        f"📍 Location: {context.chat_data['listing_data']['location']}\n\n"
+        f"🧾 <b>{listing_data['item']}</b>\n"
+        f"📦 Available: {listing_data['qty']} available\n"
+        f"📏 Size: {listing_data['size']}\n"
+        f"⏰ Expiry: {listing_data['expiry']}\n"
+        f"📍 Location: {listing_data['location']}\n\n"
         "Would you like to post this to the channel?"
     )
     buttons = [[
