@@ -157,7 +157,7 @@ def keep_alive():
 
 # ========= CONFIG =========
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8377427445:AAE-H_EiGAjs4NKE20v9S8zFLOv2AiHKcpU")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "@Sustainability_Redistribution")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@Sustainability_Redistribution")  # Make sure to include the @ symbol
 
 # ========= CHANNEL POST UPDATER =========
 async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: str):
@@ -548,8 +548,19 @@ async def post_to_channel(update, context):
         error_details = traceback.format_exc()
         print(f"Error posting to channel: {e}")
         print(f"Error details: {error_details}")
-        print(f"CHANNEL_ID: {CHANNEL_ID}")
+        print(f"CHANNEL_ID: {CHANNEL_ID} (type: {type(CHANNEL_ID)})")
+        print(f"Bot token: {BOT_TOKEN[:10]}...")
         print(f"Listing data: {listing_data}")
+        
+        # Test channel access
+        try:
+            print("\nTesting channel access...")
+            chat = await context.bot.get_chat(chat_id=CHANNEL_ID)
+            print(f"Chat info: {chat}")
+            print(f"Bot is member: {chat.get_member(context.bot.id) is not None}")
+            print(f"Bot can post: {chat.permissions.can_post_messages if hasattr(chat, 'permissions') else 'N/A'}")
+        except Exception as test_error:
+            print(f"Channel access test failed: {test_error}")
         
         # Clean up the listing if posting failed
         try:
@@ -557,8 +568,16 @@ async def post_to_channel(update, context):
             print(f"Cleaned up listing {listing_id}")
         except Exception as cleanup_error:
             print(f"Error during cleanup: {cleanup_error}")
-            
-        await q.edit_message_text("❌ Failed to post to channel. Please try again. If the problem persists, please contact support with this error: " + str(e)[:100])
+        
+        error_msg = (
+            "❌ Failed to post to channel.\n\n"
+            f"Error: {str(e)}\n\n"
+            "Please check that:\n"
+            "1. The bot is an admin in the channel\n"
+            "2. The bot has 'Post Messages' permission\n"
+            "3. The channel username is correct (case-sensitive)"
+        )
+        await q.edit_message_text(error_msg)
         return ConversationHandler.END
 
 # ========= CLAIM FLOW =========
