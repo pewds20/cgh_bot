@@ -8,8 +8,9 @@
 # ==============================
 
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ParseMode
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 )
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler,
