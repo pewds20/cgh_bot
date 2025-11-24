@@ -321,27 +321,34 @@ async def channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📣 Open Channel", url=f"https://t.me/{CHANNEL_ID.lstrip('@')}")]])
     await update.message.reply_text("Open the redistribution channel:", reply_markup=keyboard)
 
-async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.callback_query:
-        q = update.callback_query
-        await q.answer()
-        target = q.message
-    else:
-        target = update.message
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # If it's a deep link for claiming an item
+    if context.args and context.args[0].startswith('claim_'):
+        # ... (rest of the start function remains the same)
+        return
+        
+    # Regular start command
+    target = update.message or update.callback_query.message
+    keyboard = [
+        [InlineKeyboardButton("📦 List New Item", callback_data="newitem_btn")],
+        [InlineKeyboardButton("❓ Instructions", callback_data="help_info")]
+    ]
+    
     msg = (
-        "ℹ️ <b>How It Works</b>\n\n"
-        "1. Use /newitem to post excess items.\n"
-        "2. Your item will appear in the Redistribution Channel.\n"
-        "3. Others can claim and coordinate pickup.\n"
-        "4. You'll be notified when someone claims your item.\n\n"
-        "<b>Important Notes:</b>\n"
-        "• The bot may experience occasional technical difficulties\n"
-        "• If the bot is unresponsive, please post directly in the channel\n"
-        "• Manual coordination may be needed if automated features fail\n"
-        "• Always double-check pickup details with the other party\n\n"
-        "To get started, just type: /newitem"
+        "🤖 <b>Welcome to the Sustainability Redistribution Bot!</b>\n\n"
+        "This bot helps you list and claim items for redistribution within the community.\n\n"
+        "<b>Available Commands:</b>\n"
+        "• /newitem - List a new item for donation\n"
+        "• /channel - View the redistribution channel\n"
+        "• /instructions - How to use this bot\n\n"
+        "<b>Or use the buttons below:</b>"
     )
-    await target.reply_text(msg, parse_mode="HTML")
+    
+    await target.reply_text(
+        msg, 
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 # ========= NEW ITEM FLOW =========
 async def newitem(update, context):
@@ -1181,10 +1188,14 @@ async def handle_repost(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("❌ An error occurred while reposting. Please try again.")
 
 # ========= HANDLER CONFIG =========
+# Initialize the application
+app = Application.builder().token(BOT_TOKEN).build()
+
+# Conversation handler for the item creation flow
 conv_handler = ConversationHandler(
     entry_points=[
         CommandHandler("newitem", newitem),
-        CommandHandler("start", start, filters=filters.Regex(r"newitem"))
+        CallbackQueryHandler(newitem, pattern="^newitem_btn$")
     ],
     states={
         ITEM: [
@@ -1235,12 +1246,8 @@ suggest_conv = ConversationHandler(
     per_message=False
 )
 
-# ========= APP SETUP =========
-app = Application.builder().token(BOT_TOKEN).build()
-# Add start handler first to handle /start without newitem
-app.add_handler(CommandHandler("start", start))
 # Add all handlers
-app.add_handler(conv_handler)
+app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(handle_repost, pattern="^repost_"))
 app.add_handler(CallbackQueryHandler(deprecate_old_donate_button, pattern="^help_newitem$"))
 app.add_handler(CommandHandler("channel", channel))
@@ -1250,7 +1257,12 @@ app.add_handler(suggest_conv)
 app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT, private_message))
 app.add_handler(CallbackQueryHandler(handle_newtime_reply, pattern="^(accept_newtime|decline_newtime)"))
 app.add_handler(CallbackQueryHandler(handle_claim_decision, pattern="^(approve|reject)"))
-app.add_handler(CommandHandler("cancel", cancel_post))
+# Add error handler
+app.add_error_handler(error_handler)
+
+# Run the bot
+print("🤖 Bot is running...")
+app.run_polling()
 
 async def set_commands(app):
     await app.bot.set_my_commands([
