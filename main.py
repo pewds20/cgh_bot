@@ -7,9 +7,8 @@
 # - Auto cleanup of old listings
 # ==============================
 
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ParseMode
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler,
