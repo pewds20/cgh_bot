@@ -240,95 +240,164 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: st
 # ========= CLAIM WORKFLOW =========
 async def start_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start the claim process when someone clicks the claim button."""
-    # This function is no longer used for direct claims, as we're using URL buttons now
-    # Keeping it for backward compatibility
-    
-    # Check if this is a deep link for claiming an item
-    if context.args and len(context.args) > 0 and context.args[0].startswith('claim_'):
+    try:
+        query = update.callback_query
+        await query.answer()
+        
+        # Debug: Print the callback data
+        print(f"Callback data received: {query.data}")
+        
+        # Extract listing ID from callback data (format: "claim|listing_id")
         try:
-            listing_id = context.args[0].split('_', 1)[1]
-            listing = get_listing(listing_id)
+            _, listing_id = query.data.split('|')
+            print(f"Extracted listing ID: {listing_id}")
+        except ValueError as ve:
+            print(f"Error splitting callback data: {ve}")
+            await query.answer("❌ Invalid claim request. Please try again.", show_alert=True)
+            return ConversationHandler.END
             
-            if not listing:
-                await update.message.reply_text("❌ This listing is no longer available.")
-                return ConversationHandler.END
-                
-            # Calculate remaining quantity
-            claimed = sum(claim.get('qty', 0) for claim in listing.get('claims', []))
-            remaining = listing['qty'] - claimed
+        # Get the listing from Firebase
+        listing = get_listing(listing_id)
+        print(f"Retrieved listing: {listing}")
+        
+        if not listing:
+            print("Listing not found in database")
+            await query.answer("❌ This listing is no longer available.", show_alert=True)
+            return ConversationHandler.END
             
-            if remaining <= 0 or listing.get('status') not in ['available', 'open']:
-                await update.message.reply_text("❌ This item is no longer available for claiming.")
-                return ConversationHandler.END
-                
-            # Store listing info in user data
-            context.user_data['claim_listing_id'] = listing_id
-            context.user_data['max_qty'] = remaining
-            context.user_data['listing_item'] = listing['item']
+        # Calculate remaining quantity
+        try:
+            claimed = sum(int(claim.get('qty', 0)) for claim in listing.get('claims', []) if claim)
+            remaining = int(listing.get('qty', 0)) - claimed
+            print(f"Remaining quantity: {remaining}")
+        except (ValueError, TypeError) as te:
+            print(f"Error calculating remaining quantity: {te}")
+            await query.answer("❌ Error processing item quantity. Please try another item.", show_alert=True)
+            return ConversationHandler.END
+        
+        # Check if item can be claimed
+        if remaining <= 0 or listing.get('status') not in ['available', 'open']:
+            status = listing.get('status', 'unknown')
+            print(f"Item not available for claiming. Status: {status}, Remaining: {remaining}")
+            await query.answer("❌ This item is no longer available for claiming.", show_alert=True)
+            return ConversationHandler.END
             
-            # Ask for quantity
-            await update.message.reply_text(
-                f"📦 You're claiming: {listing['item']}\n"
+        # Store listing info in user data
+        context.user_data.clear()  # Clear any existing data
+        context.user_data['claim_listing_id'] = listing_id
+        context.user_data['max_qty'] = remaining
+        context.user_data['listing_item'] = listing.get('item', 'Item')
+        
+        # Debug: Print user data
+        print(f"User data set: {context.user_data}")
+        
+        # Ask for quantity
+        try:
+            await query.message.reply_text(
+                f"📦 You're claiming: {listing.get('item', 'Item')}\n"
                 f"How many units would you like to claim? (Max: {remaining})\n\n"
                 "Please enter a number or type /cancel to stop.",
                 reply_markup=ReplyKeyboardRemove()
             )
+            print("Successfully sent quantity prompt")
             return CLAIM_QTY
             
         except Exception as e:
-            print(f"Error processing claim link: {e}")
-            await update.message.reply_text(
-                "❌ An error occurred while processing your claim. Please try again."
-            )
+            print(f"Error sending quantity prompt: {e}")
+            await query.answer("❌ Failed to start claim process. Please try again.", show_alert=True)
             return ConversationHandler.END
-    
-    # If not a claim link, show the normal start menu
-    user = update.effective_user
-    keyboard = [
-        [
-            InlineKeyboardButton("📝 List New Item", callback_data="new_item"),
-            InlineKeyboardButton("❓ Help", callback_data="help_info")
-        ]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    welcome_text = (
-        f"👋 Hello {user.first_name}! I'm the CGH Sustainability Bot.\n\n"
-        "I help manage item donations and claims within the community.\n\n"
-        "What would you like to do?\n\n"
-        "• Click 'List New Item' to donate something\n"
-        "• Browse the channel for available items\n"
-        "• Use /help for instructions"
-    )
-    
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
-    return ConversationHandler.END
+        
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Error in start_claim: {e}\n{error_details}")
+        try:
+            await query.answer("❌ An error occurred while processing your request. Please try again.", show_alert=True)
+        except:
+            try:
+                await update.message.reply_text("❌ An error occurred. Please try again.")
+            except:
+                pass
+        return ConversationHandler.END
 
 async def claim_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle the quantity input for the claim."""
     try:
-        qty = int(update.message.text)
-        max_qty = context.user_data.get('max_qty', 1)
+        # Debug: Print user data at start
+        print(f"[DEBUG] claim_quantity - User data: {context.user_data}")
         
-        if qty < 1 or qty > max_qty:
+        # Get and validate quantity
+        try:
+            qty = int(update.message.text.strip())
+            print(f"[DEBUG] User entered quantity: {qty}")
+        except ValueError:
             await update.message.reply_text(
-                f"❌ Please enter a number between 1 and {max_qty}."
+                "❌ Please enter a valid number (e.g., 1, 2, 3)."
             )
             return CLAIM_QTY
             
+        # Get max quantity from user data
+        max_qty = context.user_data.get('max_qty')
+        if max_qty is None:
+            print("[ERROR] max_qty not found in user_data")
+            await update.message.reply_text(
+                "❌ Error: Could not determine maximum quantity. Please start over."
+            )
+            return ConversationHandler.END
+            
+        print(f"[DEBUG] Max quantity from user_data: {max_qty}")
+        
+        # Validate quantity range
+        if qty < 1:
+            await update.message.reply_text(
+                "❌ Please enter a number greater than 0."
+            )
+            return CLAIM_QTY
+            
+        if qty > max_qty:
+            await update.message.reply_text(
+                f"❌ The maximum quantity you can claim is {max_qty}. "
+                f"Please enter a number between 1 and {max_qty}."
+            )
+            return CLAIM_QTY
+            
+        # Store quantity in user data
         context.user_data['claim_qty'] = qty
+        print(f"[DEBUG] Stored claim_qty: {qty}")
         
-        # Ask for preferred pickup date
-        await update.message.reply_text(
-            "📅 When would you like to pick up the item?\n"
-            "Please enter your preferred date and time (e.g., \"2023-12-01 14:30\" or \"tomorrow 5pm\"):"
-        )
+        # Ask for pickup date with clear instructions
+        try:
+            await update.message.reply_text(
+                "📅 When would you like to pick up the item?\n\n"
+                "Please enter your preferred date and time, for example:\n"
+                "• Tomorrow at 2 PM\n"
+                "• Friday 3-5 PM\n"
+                "• 2023-12-25 14:30\n\n"
+                "You can be as specific or general as you like!"
+            )
+            return CLAIM_DATE
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to send date prompt: {e}")
+            await update.message.reply_text(
+                "❌ Failed to process your request. Please try again."
+            )
+            return ConversationHandler.END
         
-        return CLAIM_DATE
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"[ERROR] Unexpected error in claim_quantity: {e}\n{error_details}")
         
-    except ValueError:
-        await update.message.reply_text("❌ Please enter a valid number.")
-        return CLAIM_QTY
+        try:
+            await update.message.reply_text(
+                "❌ An unexpected error occurred. Please try again or contact support if the issue persists.\n\n"
+                "Error details have been logged."
+            )
+        except:
+            pass
+            
+        return ConversationHandler.END
 
 async def claim_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle the pickup date input and send claim request to seller."""
@@ -1224,7 +1293,7 @@ app.add_handler(CallbackQueryHandler(handle_claim_action, pattern=r'^(approve_cl
 app.add_handler(CallbackQueryHandler(suggest_time, pattern=r'^suggest_time\|'))
 app.add_handler(CallbackQueryHandler(cancel_suggest, pattern=r'^cancel_suggest\|'))
 
-# Add direct handler for claim button
+# Add handler for claim button
 app.add_handler(CallbackQueryHandler(start_claim, pattern=r'^claim\|'))
 
 # Claim conversation handler
