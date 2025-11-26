@@ -8,7 +8,7 @@
 # ==============================
 
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, ReplyKeyboardRemove
 )
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -216,11 +216,19 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: st
         return False
 
 # ========= CANCEL =========
-async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.callback_query:
-        await update.callback_query.edit_message_text("❌ Cancelled. Start again with /start.")
-    else:
-        await update.message.reply_text("❌ Cancelled. Start again with /start.")
+async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancel the current operation and return to the start."""
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text("Operation cancelled. Type /start to begin again.")
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Allow the user to cancel the current operation."""
+    await update.message.reply_text(
+        'Operation cancelled. Type /start to begin again.',
+        reply_markup=ReplyKeyboardRemove()
+    )
     return ConversationHandler.END
 
 # ========= BASIC COMMANDS =========
