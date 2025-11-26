@@ -196,14 +196,15 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: st
             f"📍 {html.escape(listing.get('location', 'N/A'))}"
         )
         
-        # Add claim button if there are remaining items
-        if remaining > 0:
-            if listing.get('status') == 'available':
-                keyboard = [
-                    [InlineKeyboardButton("🤝 Claim", callback_data=f"claim|{listing_id}")]
-                ]
-            else:
-                keyboard = []
+        # Add claim button that opens a direct chat with the bot
+        if remaining > 0 and listing.get('status') in ['available', 'open']:
+            bot_username = context.bot.username
+            keyboard = [
+                [InlineKeyboardButton(
+                    "🤝 Claim This Item",
+                    url=f"https://t.me/{bot_username}?start=claim_{listing_id}"
+                )]
+            ]
         else:
             text += "\n\n✅ <b>Fully Claimed!</b>"
             keyboard = []
@@ -240,49 +241,63 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: st
 async def start_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start the claim process when someone clicks the claim button."""
     try:
-        query = update.callback_query
-        await query.answer()
-        
-        # Extract listing ID from callback data (format: "claim|listing_id")
-        _, listing_id = query.data.split('|')
-        listing = get_listing(listing_id)
-        
-        if not listing:
-            await query.edit_message_text("❌ This listing is no longer available.")
-            return ConversationHandler.END
-            
-        if listing.get('status') not in ['available', 'open']:
-            await query.answer("❌ This item has already been claimed.", show_alert=True)
-            return ConversationHandler.END
-        
-        # Calculate remaining quantity
-        claimed = sum(claim.get('qty', 0) for claim in listing.get('claims', []))
-        remaining = listing['qty'] - claimed
-        
-        if remaining <= 0:
-            await query.answer("❌ This item is no longer available.", show_alert=True)
-            return ConversationHandler.END
-        
-        # Store listing ID and max quantity in user data
-        context.user_data['claim_listing_id'] = listing_id
-        context.user_data['max_qty'] = remaining
-        context.user_data['listing_item'] = listing['item']  # Store item name for later use
-        
-        # Ask for quantity
-        await query.message.reply_text(
-            f"📦 You're claiming: {listing['item']}\n"
-            f"How many units would you like to claim? (Max: {remaining})",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        return CLAIM_QTY
-        
-    except Exception as e:
-        print(f"Error in start_claim: {e}")
         try:
-            await query.answer("❌ An error occurred. Please try again.", show_alert=True)
-        except:
-            pass
-        return ConversationHandler.END
+            listing_id = context.args[0].split('_', 1)[1]
+            listing = get_listing(listing_id)
+            
+            if not listing:
+                await update.message.reply_text("❌ This listing is no longer available.")
+                return ConversationHandler.END
+                
+            # Calculate remaining quantity
+            claimed = sum(claim.get('qty', 0) for claim in listing.get('claims', []))
+            remaining = listing['qty'] - claimed
+            
+            if remaining <= 0 or listing.get('status') not in ['available', 'open']:
+                await update.message.reply_text("❌ This item is no longer available for claiming.")
+                return ConversationHandler.END
+                
+            # Store listing info in user data
+            context.user_data['claim_listing_id'] = listing_id
+            context.user_data['max_qty'] = remaining
+            context.user_data['listing_item'] = listing['item']
+            
+            # Ask for quantity
+            await update.message.reply_text(
+                f"📦 You're claiming: {listing['item']}\n"
+                f"How many units would you like to claim? (Max: {remaining})\n\n"
+                "Please enter a number or type /cancel to stop.",
+                reply_markup=ReplyKeyboardRemove()
+            )
+            return CLAIM_QTY
+            
+        except Exception as e:
+            print(f"Error processing claim link: {e}")
+            await update.message.reply_text(
+                "❌ An error occurred while processing your claim. Please try again."
+            )
+            return ConversationHandler.END
+    
+    # Normal start command
+    keyboard = [
+        [
+            InlineKeyboardButton("📝 List New Item", callback_data="new_item"),
+            InlineKeyboardButton("❓ Help", callback_data="help_info")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    welcome_text = (
+        f"👋 Hello {user.first_name}! I'm the CGH Sustainability Bot.\n\n"
+        "I help manage item donations and claims within the community.\n\n"
+        "What would you like to do?\n\n"
+        "• Click 'List New Item' to donate something\n"
+        "• Browse the channel for available items\n"
+        "• Use /help for instructions"
+    )
+    
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    return ConversationHandler.END
 
 async def claim_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle the quantity input for the claim."""
