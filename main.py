@@ -182,68 +182,58 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: st
         if not listing:
             print(f"Listing {listing_id} not found")
             return False
+            
+        # Calculate remaining quantity
+        claimed = sum(claim.get('qty', 0) for claim in listing.get('claims', []))
+        remaining = listing.get('qty', 1) - claimed
         
-        # Get the latest claims info
-        claims = listing.get('claims', {})
-        claimed_by = ""
-        if claims:
-            # Get the most recent claim
-            latest_claim = max(claims, key=lambda x: x.get('timestamp', 0))
-            user_id = latest_claim.get('user_id')
-            if user_id:
-                try:
-                    user = await context.bot.get_chat(user_id)
-                    claimed_by = f" by @{user.username}" if user.username else f" by {user.full_name}"
-                except:
-                    claimed_by = " by a user"
-        
-        # Create the message text based on status
-        if listing.get("status") == "claimed" or listing.get("remaining", 0) <= 0:
-            status_text = f"✅ <b>Claimed{claimed_by}</b>"
-        else:
-            status_text = f"📦 Available: {listing.get('remaining', 0)} of {listing.get('qty', 1)}"
-        
+        # Prepare the message text
         text = (
-            f"🧾 <b>{listing.get('item', 'Item')}</b>\n"
-            f"{status_text}\n"
-            f"📏 Size: {listing.get('size', 'N/A')}\n"
-            f"⏰ Expiry: {listing.get('expiry', 'N/A')}\n"
-            f"📍 {listing.get('location', 'N/A')}"
+            f"🧾 <b>{html.escape(listing['item'])}</b>\n"
+            f"📦 Quantity: {listing['qty']} (Remaining: {remaining})\n"
+            f"📏 Size: {html.escape(listing.get('size', 'N/A'))}\n"
+            f"⏰ Expiry: {html.escape(listing.get('expiry', 'N/A'))}\n"
+            f"📍 {html.escape(listing.get('location', 'N/A'))}"
         )
         
-        # Create the appropriate keyboard (only show claim button if available)
-        keyboard = None
-        if listing.get("status") in ["available", "open"] and listing.get("remaining", 0) > 0:
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🤝 Claim", callback_data=f"claim|{listing_id}")
-            ]])
+        # Add claim button if there are remaining items
+        if remaining > 0:
+            if listing.get('status') == 'available':
+                keyboard = [
+                    [InlineKeyboardButton("🤝 Claim", callback_data=f"claim|{listing_id}")]
+                ]
+            else:
+                keyboard = []
+        else:
+            text += "\n\n✅ <b>Fully Claimed!</b>"
+            keyboard = []
+            
+        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
         
-        message_id = listing.get("channel_message_id")
-        if not message_id:
-            print(f"No channel_message_id for listing {listing_id}")
-            return False
-                
-        # Update the message
-        if listing.get("photo_id"):
+        # Try to update the message
+        try:
             await context.bot.edit_message_caption(
                 chat_id=CHANNEL_ID,
-                message_id=message_id,
+                message_id=int(listing_id),
                 caption=text,
-                reply_markup=keyboard,
+                reply_markup=reply_markup,
                 parse_mode="HTML"
             )
-        else:
-            await context.bot.edit_message_text(
-                chat_id=CHANNEL_ID,
-                message_id=message_id,
-                text=text,
-                reply_markup=keyboard,
-                parse_mode="HTML"
-            )
-        return True
-        
+        except Exception as e:
+            print(f"Failed to update caption: {e}")
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=CHANNEL_ID,
+                    message_id=int(listing_id),
+                    text=text,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML"
+                )
+            except Exception as e2:
+                print(f"Failed to update message text: {e2}")
+                
     except Exception as e:
-        print(f"Error in update_channel_post for {listing_id}: {e}")
+        print(f"Error in update_channel_post: {e}")
         return False
 
 # ========= CLAIM WORKFLOW =========
