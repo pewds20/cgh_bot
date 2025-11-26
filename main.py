@@ -611,21 +611,30 @@ async def post_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         
         # Send to channel
-        if 'photo_id' in listing_data and listing_data['photo_id']:
-            await context.bot.send_photo(
-                chat_id=CHANNEL_ID,
-                photo=listing_data['photo_id'],
-                caption=post_text,
-                reply_markup=keyboard,
-                parse_mode="Markdown"
-            )
-        else:
-            await context.bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=post_text,
-                reply_markup=keyboard,
-                parse_mode="Markdown"
-            )
+        try:
+            if 'photo_id' in listing_data and listing_data['photo_id']:
+                message = await context.bot.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=listing_data['photo_id'],
+                    caption=post_text,
+                    reply_markup=keyboard,
+                    parse_mode="Markdown"
+                )
+            else:
+                message = await context.bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=post_text,
+                    reply_markup=keyboard,
+                    parse_mode="Markdown"
+                )
+            
+            # Save the message ID to the listing
+            update_listing(listing_id, {'channel_message_id': message.message_id})
+            
+        except Exception as e:
+            print(f"Error posting to channel: {e}")
+            await query.edit_message_text("❌ Failed to post to channel. Please try again.")
+            return ConversationHandler.END
         
         await query.edit_message_text(
             "✅ Your item has been listed in the channel!\n\n"
@@ -725,7 +734,12 @@ suggest_conv = ConversationHandler(
 # ... (rest of the code remains the same)
 
 # Initialize the application
-app = Application.builder().token(BOT_TOKEN).build()
+app = (
+    Application.builder()
+    .token(BOT_TOKEN)
+    .arbitrary_callback_data(True)  # Allow arbitrary callback data
+    .build()
+)
 
 # Add all handlers
 async def handle_claim(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -782,7 +796,11 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("instructions", instructions))
 app.add_handler(CommandHandler("channel", channel))
 app.add_handler(CallbackQueryHandler(instructions, pattern="^(help_info|back_to_start)$"))
+# Handle claim callbacks from both private chats and channels
 app.add_handler(CallbackQueryHandler(handle_claim, pattern=r'^claim\|'))
+
+# Handle channel posts and channel callbacks
+app.add_handler(MessageHandler(filters.ChatType.CHANNEL, channel))
 app.add_handler(conv_handler)  # Add the main conversation handler
 app.add_handler(suggest_conv)
 async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
