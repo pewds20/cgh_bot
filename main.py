@@ -274,7 +274,6 @@ async def start_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         f"(Max: {listing.get('remaining', 1)})",
         reply_markup=ReplyKeyboardRemove()
     )
-    
     return CLAIM_QTY
 
 async def claim_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
