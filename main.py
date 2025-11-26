@@ -240,7 +240,11 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: st
 # ========= CLAIM WORKFLOW =========
 async def start_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start the claim process when someone clicks the claim button."""
-    try:
+    # This function is no longer used for direct claims, as we're using URL buttons now
+    # Keeping it for backward compatibility
+    
+    # Check if this is a deep link for claiming an item
+    if context.args and len(context.args) > 0 and context.args[0].startswith('claim_'):
         try:
             listing_id = context.args[0].split('_', 1)[1]
             listing = get_listing(listing_id)
@@ -278,7 +282,8 @@ async def start_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             )
             return ConversationHandler.END
     
-    # Normal start command
+    # If not a claim link, show the normal start menu
+    user = update.effective_user
     keyboard = [
         [
             InlineKeyboardButton("📝 List New Item", callback_data="new_item"),
