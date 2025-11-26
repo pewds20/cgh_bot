@@ -20,6 +20,7 @@ import os, datetime, calendar, json, time
 from pathlib import Path
 from flask import Flask
 from threading import Thread
+import os
 import firebase_admin
 from firebase_admin import credentials, db
 from firebase_admin.db import Reference
@@ -150,10 +151,15 @@ def home():
 
 def run():
     port = int(os.environ.get('PORT', 8000))
-    app_keepalive.run(host='0.0.0.0', port=port)
+    # Use waitress as production server for better performance
+    from waitress import serve
+    serve(app_keepalive, host='0.0.0.0', port=port, threads=4)
 
 def keep_alive():
-    t = Thread(target=run)
+    # Only start the keep-alive server if not running in a worker process
+    if os.environ.get('WORKER') != '1':
+        t = Thread(target=run, daemon=True)
+        t.start()
     t.start()
 
 # ========= CONFIG =========
@@ -765,6 +771,15 @@ print("🤖 Bot starting with Firebase persistence + keep-alive + auto-archive .
 if __name__ == "__main__":
     if not refresh_listings():
         print("⚠️ Warning: Could not load initial listings from Firebase")
+    
+    # Start the keep-alive server in the main process
     keep_alive()
+    
+    # Run the bot in the main thread
+    try:
+        app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    except Exception as e:
+        print(f"Bot crashed with error: {e}")
+        raise
     print("✅ Bot is now running!")
     app.run_polling()

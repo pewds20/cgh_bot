@@ -1,4 +1,6 @@
 python-telegram-bot==20.3
-Flask
-firebase-admin
+Flask==2.3.3
+firebase-admin==6.2.0
 gunicorn==21.2.0
+waitress==2.1.2
+python-dotenv==1.0.0
