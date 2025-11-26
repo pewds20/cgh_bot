@@ -1211,7 +1211,7 @@ suggest_conv = ConversationHandler(
     fallbacks=[
         CallbackQueryHandler(cancel_post, pattern=r'^cancel_suggest\|')
     ],
-    per_message=True,
+    per_message=False,
     per_chat=True,
     per_user=True
 )
@@ -1255,7 +1255,7 @@ claim_conv = ConversationHandler(
         CommandHandler('cancel', cancel_claim),
         CallbackQueryHandler(cancel_claim, pattern=r'^cancel_claim$')
     ],
-    per_message=True,
+    per_message=False,
     per_chat=True,
     per_user=True
 )
@@ -1272,9 +1272,6 @@ app.add_handler(CallbackQueryHandler(instructions, pattern="^(help_info|back_to_
 app.add_handler(CallbackQueryHandler(handle_claim_action, pattern=r'^(approve_claim|reject_claim)\|'))
 app.add_handler(CallbackQueryHandler(suggest_time, pattern=r'^suggest_time\|'))
 app.add_handler(CallbackQueryHandler(cancel_suggest, pattern=r'^cancel_suggest\|'))
-
-# Add handler for claim button
-app.add_handler(CallbackQueryHandler(handle_claim, pattern=r'^claim\|'))
 
 # Add all conversation handlers
 app.add_handler(conv_handler)  # Main conversation handler for listing items
