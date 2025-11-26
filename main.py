@@ -332,6 +332,11 @@ async def claim_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         
         return CLAIM_CONFIRM
+        
+    except Exception as e:
+        print(f"Error in claim_date: {e}")
+        await update.message.reply_text("❌ An error occurred while processing your request. Please try again.")
+        return ConversationHandler.END
 
 async def confirm_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle quantity confirmation or update."""
