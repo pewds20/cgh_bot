@@ -176,34 +176,53 @@ CHANNEL_ID = os.getenv("CHANNEL_ID", "@Sustainability_Redistribution")  # Make s
 # ========= CHANNEL POST UPDATER =========
 async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: str):
     """Update the channel post with current listing status."""
-    listing = get_listing(listing_id)
-    if not listing:
-        return False
-    
-    # Create the message text
-    status_text = "✅ <b>Fully Claimed</b>" if listing.get("remaining", 0) <= 0 else f"📦 Available: {listing.get('remaining', 0)} of {listing.get('qty', 1)}"
-    
-    text = (
-        f"🧾 <b>{listing.get('item', 'Unknown Item')}</b>\n"
-        f"{status_text}\n"
-        f"📏 Size: {listing.get('size', 'N/A')}\n"
-        f"⏰ Expiry: {listing.get('expiry', 'N/A')}\n"
-        f"📍 {listing.get('location', 'N/A')}"
-    )
-    
-    # Create the appropriate keyboard
-    keyboard = None
-    if listing.get("status") == "open" and listing.get("remaining", 0) > 0:
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🤝 Claim", callback_data=f"claim|{listing_id}")
-        ]])
-    
     try:
+        listing = get_listing(listing_id)
+        if not listing:
+            print(f"Listing {listing_id} not found")
+            return False
+        
+        # Get the latest claims info
+        claims = listing.get('claims', {})
+        claimed_by = ""
+        if claims:
+            # Get the most recent claim
+            latest_claim = max(claims, key=lambda x: x.get('timestamp', 0))
+            user_id = latest_claim.get('user_id')
+            if user_id:
+                try:
+                    user = await context.bot.get_chat(user_id)
+                    claimed_by = f" by @{user.username}" if user.username else f" by {user.full_name}"
+                except:
+                    claimed_by = " by a user"
+        
+        # Create the message text based on status
+        if listing.get("status") == "claimed" or listing.get("remaining", 0) <= 0:
+            status_text = f"✅ <b>Claimed{claimed_by}</b>"
+        else:
+            status_text = f"📦 Available: {listing.get('remaining', 0)} of {listing.get('qty', 1)}"
+        
+        text = (
+            f"🧾 <b>{listing.get('item', 'Item')}</b>\n"
+            f"{status_text}\n"
+            f"📏 Size: {listing.get('size', 'N/A')}\n"
+            f"⏰ Expiry: {listing.get('expiry', 'N/A')}\n"
+            f"📍 {listing.get('location', 'N/A')}"
+        )
+        
+        # Create the appropriate keyboard (only show claim button if available)
+        keyboard = None
+        if listing.get("status") in ["available", "open"] and listing.get("remaining", 0) > 0:
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🤝 Claim", callback_data=f"claim|{listing_id}")
+            ]])
+        
         message_id = listing.get("channel_message_id")
         if not message_id:
+            print(f"No channel_message_id for listing {listing_id}")
             return False
-            
-        # Check if the message has a photo
+                
+        # Update the message
         if listing.get("photo_id"):
             await context.bot.edit_message_caption(
                 chat_id=CHANNEL_ID,
@@ -221,8 +240,9 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: st
                 parse_mode="HTML"
             )
         return True
+        
     except Exception as e:
-        print(f"Error updating channel post: {e}")
+        print(f"Error in update_channel_post for {listing_id}: {e}")
         return False
 
 # ========= CANCEL =========
@@ -326,8 +346,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await newitem(update, context)
     
     msg = (
-        "🏥 <b>Welcome to CGH Surplus Redistribution Bot</b>\n\n"
-        "This bot helps CGH staff share excess medical supplies and equipment.\n\n"
+        "👋 <b>Welcome to the Sustainability Redistribution Bot</b>\n\n"
+        "This bot helps hospital staff share excess consumables easily.\n\n"
         "<b>Available Commands:</b>\n"
         "📦 /newitem - List an item for donation\n"
         "ℹ️ /instructions - How to use this bot\n\n"
@@ -752,40 +772,82 @@ async def handle_claim(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
     try:
-        # Get the listing
-        listing = get_listing(listing_id)
+        # Get the listing from Firebase
+        listing_ref = listings_ref.child(listing_id)
+        listing = listing_ref.get()
+        
         if not listing:
-            await query.edit_message_text("❌ Sorry, this listing is no longer available.")
+            await query.answer("❌ This listing no longer exists.", show_alert=True)
             return
             
         # Check if item is already claimed
-        if listing.get('status') != 'available':
+        if listing.get('status') != 'available' and listing.get('status') != 'open':
             await query.answer("❌ This item has already been claimed.", show_alert=True)
             return
             
         # Add claim to the listing
-        add_claim(
+        success = add_claim(
             listing_id=listing_id,
             user_id=user.id,
-            qty=1,  # Default quantity to 1, can be adjusted if needed
+            qty=1,  # Default quantity to 1
             pickup_time="To be arranged"
         )
+        
+        if not success:
+            await query.answer("❌ Failed to process claim. Please try again.", show_alert=True)
+            return
+            
+        # Get updated listing
+        updated_listing = get_listing(listing_id)
+        if not updated_listing:
+            await query.answer("❌ Error updating listing.", show_alert=True)
+            return
         
         # Update the channel post
         await update_channel_post(context, listing_id)
         
-        # Notify the user
+        # Notify the user who claimed the item
         await query.answer("✅ You've claimed this item! The donor will contact you soon.", show_alert=True)
         
         # Notify the original poster
         try:
             await context.bot.send_message(
                 chat_id=listing['user_id'],
-                text=f"🎉 Your item '{listing['item']}' has been claimed by {user.full_name}! "
+                text=f"🎉 Your item '{listing['item']}' has been claimed by {user.full_name} ({user.id})! "
                      f"Please contact them to arrange for pickup."
             )
         except Exception as e:
             print(f"Failed to notify original poster: {e}")
+            
+        # Update the channel post to show it's claimed
+        try:
+            message_id = updated_listing.get('channel_message_id')
+            if message_id:
+                status_text = "✅ <b>Claimed by @" + (user.username or user.full_name) + "</b>"
+                text = (
+                    f"🧾 <b>{updated_listing.get('item', 'Item')}</b>\n"
+                    f"{status_text}\n"
+                    f"📏 Size: {updated_listing.get('size', 'N/A')}\n"
+                    f"⏰ Expiry: {updated_listing.get('expiry', 'N/A')}\n"
+                    f"📍 {updated_listing.get('location', 'N/A')}"
+                )
+                
+                if 'photo_id' in updated_listing and updated_listing['photo_id']:
+                    await context.bot.edit_message_caption(
+                        chat_id=CHANNEL_ID,
+                        message_id=message_id,
+                        caption=text,
+                        parse_mode="HTML"
+                    )
+                else:
+                    await context.bot.edit_message_text(
+                        chat_id=CHANNEL_ID,
+                        message_id=message_id,
+                        text=text,
+                        parse_mode="HTML"
+                    )
+        except Exception as e:
+            print(f"Error updating channel post after claim: {e}")
             
     except Exception as e:
         print(f"Error handling claim: {e}")
