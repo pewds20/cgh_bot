@@ -1192,15 +1192,19 @@ app = (
 
 # Add all handlers
 async def handle_claim(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the claim button callback."""
+    """Handle the claim button callback in a simplified flow.
+    
+    This function processes a claim immediately when the claim button is pressed,
+    without any additional questions. It claims 1 unit of the item.
+    """
     query = update.callback_query
     await query.answer()
     
-    # Extract listing ID from callback data (format: "claim|listing_id")
-    _, listing_id = query.data.split('|')
-    user = update.effective_user
-    
     try:
+        # Extract listing ID from callback data (format: "claim|listing_id")
+        _, listing_id = query.data.split('|')
+        user = update.effective_user
+        
         # Get the listing from Firebase
         listing_ref = listings_ref.child(listing_id)
         listing = listing_ref.get()
@@ -1209,12 +1213,20 @@ async def handle_claim(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("❌ This listing no longer exists.", show_alert=True)
             return
             
-        # Check if item is already claimed
-        if listing.get('status') != 'available' and listing.get('status') != 'open':
-            await query.answer("❌ This item has already been claimed.", show_alert=True)
+        # Check if item is available
+        if listing.get('status') not in ['available', 'open']:
+            await query.answer("❌ This item is no longer available.", show_alert=True)
             return
             
-        # Add claim to the listing
+        # Check remaining quantity
+        claimed = sum(claim.get('qty', 0) for claim in listing.get('claims', []) if claim)
+        remaining = listing.get('qty', 1) - claimed
+        
+        if remaining <= 0:
+            await query.answer("❌ This item is no longer available.", show_alert=True)
+            return
+            
+        # Add claim to the listing (1 unit)
         success = add_claim(
             listing_id=listing_id,
             user_id=user.id,
@@ -1294,38 +1306,11 @@ app.add_handler(CallbackQueryHandler(suggest_time, pattern=r'^suggest_time\|'))
 app.add_handler(CallbackQueryHandler(cancel_suggest, pattern=r'^cancel_suggest\|'))
 
 # Add handler for claim button
-app.add_handler(CallbackQueryHandler(start_claim, pattern=r'^claim\|'))
-
-# Claim conversation handler
-claim_conv = ConversationHandler(
-    entry_points=[
-        CallbackQueryHandler(start_claim, pattern=r'^claim\|')
-    ],
-    states={
-        CLAIM_QTY: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, claim_quantity)
-        ],
-        CLAIM_DATE: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, claim_date)
-        ],
-        CLAIM_CONFIRM: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_claim)
-        ],
-        SUGGEST: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggest_time_text)
-        ]
-    },
-    fallbacks=[
-        CommandHandler('cancel', cancel),
-        CallbackQueryHandler(cancel_suggest, pattern=r'^cancel_suggest\|')
-    ],
-    per_message=False
-)
+app.add_handler(CallbackQueryHandler(handle_claim, pattern=r'^claim\|'))
 
 # Add all conversation handlers
 app.add_handler(conv_handler)  # Main conversation handler for listing items
 app.add_handler(suggest_conv)  # For suggesting times
-app.add_handler(claim_conv)    # For handling claims
 
 # Handle channel posts
 app.add_handler(MessageHandler(filters.ChatType.CHANNEL, channel))
