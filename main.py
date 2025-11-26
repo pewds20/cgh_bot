@@ -239,32 +239,50 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: st
 # ========= CLAIM WORKFLOW =========
 async def start_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start the claim process when someone clicks the claim button."""
-    query = update.callback_query
-    await query.answer()
-    
-    # Extract listing ID from callback data (format: "claim|listing_id")
-    _, listing_id = query.data.split('|')
-    listing = get_listing(listing_id)
-    
-    if not listing:
-        await query.edit_message_text("❌ This listing is no longer available.")
-        return ConversationHandler.END
+    try:
+        query = update.callback_query
+        await query.answer()
         
-    if listing.get('status') != 'available' and listing.get('status') != 'open':
-        await query.answer("❌ This item has already been claimed.", show_alert=True)
+        # Extract listing ID from callback data (format: "claim|listing_id")
+        _, listing_id = query.data.split('|')
+        listing = get_listing(listing_id)
+        
+        if not listing:
+            await query.edit_message_text("❌ This listing is no longer available.")
+            return ConversationHandler.END
+            
+        if listing.get('status') not in ['available', 'open']:
+            await query.answer("❌ This item has already been claimed.", show_alert=True)
+            return ConversationHandler.END
+        
+        # Calculate remaining quantity
+        claimed = sum(claim.get('qty', 0) for claim in listing.get('claims', []))
+        remaining = listing['qty'] - claimed
+        
+        if remaining <= 0:
+            await query.answer("❌ This item is no longer available.", show_alert=True)
+            return ConversationHandler.END
+        
+        # Store listing ID and max quantity in user data
+        context.user_data['claim_listing_id'] = listing_id
+        context.user_data['max_qty'] = remaining
+        context.user_data['listing_item'] = listing['item']  # Store item name for later use
+        
+        # Ask for quantity
+        await query.message.reply_text(
+            f"📦 You're claiming: {listing['item']}\n"
+            f"How many units would you like to claim? (Max: {remaining})",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return CLAIM_QTY
+        
+    except Exception as e:
+        print(f"Error in start_claim: {e}")
+        try:
+            await query.answer("❌ An error occurred. Please try again.", show_alert=True)
+        except:
+            pass
         return ConversationHandler.END
-    
-    # Store listing ID in user data
-    context.user_data['claim_listing_id'] = listing_id
-    context.user_data['max_qty'] = listing.get('remaining', 1)
-    
-    # Ask for quantity
-    await query.edit_message_text(
-        f"How many units of '{listing['item']}' would you like to claim? "
-        f"(Max: {listing.get('remaining', 1)})",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return CLAIM_QTY
 
 async def claim_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle the quantity input for the claim."""
@@ -1185,6 +1203,9 @@ app.add_handler(CallbackQueryHandler(instructions, pattern="^(help_info|back_to_
 app.add_handler(CallbackQueryHandler(handle_claim_action, pattern=r'^(approve_claim|reject_claim)\|'))
 app.add_handler(CallbackQueryHandler(suggest_time, pattern=r'^suggest_time\|'))
 app.add_handler(CallbackQueryHandler(cancel_suggest, pattern=r'^cancel_suggest\|'))
+
+# Add direct handler for claim button
+app.add_handler(CallbackQueryHandler(start_claim, pattern=r'^claim\|'))
 
 # Claim conversation handler
 claim_conv = ConversationHandler(
