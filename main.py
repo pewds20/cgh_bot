@@ -260,6 +260,17 @@ async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: st
         print(f"Error in update_channel_post: {e}")
         return False
 
+# ========= CANCEL HANDLER =========
+async def cancel_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancel and end the claim conversation."""
+    query = update.callback_query
+    if query:
+        await query.answer("Claim process cancelled.")
+        await query.edit_message_text("❌ Claim process cancelled.")
+    else:
+        await update.message.reply_text("❌ Claim process cancelled.")
+    return ConversationHandler.END
+
 # ========= CLAIM WORKFLOW =========
 async def start_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start the claim process when someone clicks the claim button."""
@@ -1200,7 +1211,9 @@ suggest_conv = ConversationHandler(
     fallbacks=[
         CallbackQueryHandler(cancel_post, pattern=r'^cancel_suggest\|')
     ],
-    per_message=False
+    per_message=True,
+    per_chat=True,
+    per_user=True
 )
 
 # ... (rest of the code remains the same)
@@ -1242,6 +1255,7 @@ claim_conv = ConversationHandler(
         CommandHandler('cancel', cancel_claim),
         CallbackQueryHandler(cancel_claim, pattern=r'^cancel_claim$')
     ],
+    per_message=True,
     per_chat=True,
     per_user=True
 )
