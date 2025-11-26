@@ -624,6 +624,28 @@ async def post_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log errors and handle them gracefully."""
+    import traceback
+    
+    # Log the error before we try anything that might fail
+    tb_list = traceback.format_exception(None, context.error, context.error.__traceback__)
+    tb_string = ''.join(tb_list)
+    
+    # Log the error
+    print(f"An exception was raised: {context.error}")
+    print(tb_string)
+    
+    # Try to notify the user
+    try:
+        if update and hasattr(update, 'effective_chat'):
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text="❌ An error occurred while processing your request. Please try again."
+            )
+    except Exception as e:
+        print(f"Error while sending error message: {e}")
+
 # Conversation handler for new item listing
 conv_handler = ConversationHandler(
     entry_points=[
@@ -638,19 +660,16 @@ conv_handler = ConversationHandler(
         LOCATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_photo)],
         PHOTO: [
             MessageHandler(filters.PHOTO, save_photo),
-            MessageHandler(filters.Regex("^(?i)(skip|none|na|not available)$"), skip_photo),
+            CallbackQueryHandler(skip_photo, pattern="^skip_photo$"),
             MessageHandler(filters.TEXT & ~filters.COMMAND, ask_photo)
         ],
         CONFIRM: [
             CallbackQueryHandler(post_to_channel, pattern=r'^confirm_post$'),
-            CallbackQueryHandler(cancel_post, pattern=r'^cancel_post$'),
-            CallbackQueryHandler(
-                lambda u, c: u.answer("This action is not available right now.", show_alert=True)
-            )
+            CallbackQueryHandler(cancel_post, pattern=r'^cancel_post$')
         ]
     },
-    fallbacks=[CommandHandler("cancel", cancel_post)],
-    per_message=True
+    fallbacks=[CommandHandler("cancel", cancel)],
+    per_message=False
 )
 
 async def suggest_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -673,12 +692,18 @@ async def handle_suggest_time_text(update: Update, context: ContextTypes.DEFAULT
 
 # Conversation handler for suggesting pickup times
 suggest_conv = ConversationHandler(
-    entry_points=[CommandHandler("suggest", suggest_time)],
+    entry_points=[
+        CallbackQueryHandler(suggest_time, pattern=r'^suggest\|')
+    ],
     states={
-        SUGGEST: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggest_time_text)]
+        SUGGEST: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggest_time_text)
+        ]
     },
-    fallbacks=[CommandHandler("cancel", cancel_post)],
-    per_message=True
+    fallbacks=[
+        CallbackQueryHandler(cancel_post, pattern=r'^cancel_suggest\|')
+    ],
+    per_message=False
 )
 
 # ... (rest of the code remains the same)
@@ -706,6 +731,14 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, private_message))
 # Add error handler
 app.add_error_handler(error_handler)
+
+# Set up logging
+import logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
 # Set up command menu
 async def set_commands(app):
