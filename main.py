@@ -155,12 +155,16 @@ def run():
     from waitress import serve
     serve(app_keepalive, host='0.0.0.0', port=port, threads=4)
 
+# Global variable to track if the keep-alive thread is running
+_keep_alive_thread = None
+
 def keep_alive():
+    global _keep_alive_thread
     # Only start the keep-alive server if not running in a worker process
-    if os.environ.get('WORKER') != '1':
-        t = Thread(target=run, daemon=True)
-        t.start()
-    t.start()
+    # and if the thread hasn't been started yet
+    if os.environ.get('WORKER') != '1' and (_keep_alive_thread is None or not _keep_alive_thread.is_alive()):
+        _keep_alive_thread = Thread(target=run, daemon=True)
+        _keep_alive_thread.start()
 
 # ========= CONFIG =========
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8377427445:AAE-H_EiGAjs4NKE20v9S8zFLOv2AiHKcpU")
