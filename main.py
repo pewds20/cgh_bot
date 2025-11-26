@@ -1245,12 +1245,8 @@ claim_conv = ConversationHandler(
     per_chat=True,
     per_user=True
 )
-        except Exception as e:
-            print(f"Error updating channel post after claim: {e}")
-            
-    except Exception as e:
-        print(f"Error handling claim: {e}")
-        await query.answer("❌ An error occurred while processing your claim. Please try again.", show_alert=True)
+
+# Add all handlers
 
 # Add all handlers
 app.add_handler(CommandHandler("start", start))
