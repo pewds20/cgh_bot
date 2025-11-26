@@ -467,11 +467,20 @@ async def handle_expiry_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def ask_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Store location and ask for photo."""
-    location = update.message.text.strip()
-    context.user_data['location'] = location
+    if update.message and update.message.text and update.message.text.strip().lower() == 'skip':
+        # If user typed 'skip', go straight to confirmation
+        return await skip_photo(update, context)
+        
+    location = update.message.text.strip() if update.message and update.message.text else context.user_data.get('location', '')
+    if location:
+        context.user_data['location'] = location
+    
+    keyboard = [[InlineKeyboardButton("⏩ Skip Photo", callback_data="skip_photo")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "📸 Please send a photo of the item or type 'skip' if none"
+        "📸 Please send a photo of the item (or click 'Skip Photo' below)",
+        reply_markup=reply_markup
     )
     return PHOTO
 
@@ -505,17 +514,20 @@ async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(
-            item_info,
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
+        query = update.callback_query
+        await query.answer()
+        await query.edit_message_text(
+            text=item_info,
+            parse_mode="Markdown",
+            reply_markup=reply_markup
         )
     else:
         await update.message.reply_text(
-            item_info,
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
+            text=item_info,
+            parse_mode="Markdown",
+            reply_markup=reply_markup
         )
+    
     return CONFIRM
 
 async def save_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -716,10 +728,61 @@ suggest_conv = ConversationHandler(
 app = Application.builder().token(BOT_TOKEN).build()
 
 # Add all handlers
+async def handle_claim(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle the claim button callback."""
+    query = update.callback_query
+    await query.answer()
+    
+    # Extract listing ID from callback data (format: "claim|listing_id")
+    _, listing_id = query.data.split('|')
+    user = update.effective_user
+    
+    try:
+        # Get the listing
+        listing = get_listing(listing_id)
+        if not listing:
+            await query.edit_message_text("❌ Sorry, this listing is no longer available.")
+            return
+            
+        # Check if item is already claimed
+        if listing.get('status') != 'available':
+            await query.answer("❌ This item has already been claimed.", show_alert=True)
+            return
+            
+        # Add claim to the listing
+        add_claim(
+            listing_id=listing_id,
+            user_id=user.id,
+            qty=1,  # Default quantity to 1, can be adjusted if needed
+            pickup_time="To be arranged"
+        )
+        
+        # Update the channel post
+        await update_channel_post(context, listing_id)
+        
+        # Notify the user
+        await query.answer("✅ You've claimed this item! The donor will contact you soon.", show_alert=True)
+        
+        # Notify the original poster
+        try:
+            await context.bot.send_message(
+                chat_id=listing['user_id'],
+                text=f"🎉 Your item '{listing['item']}' has been claimed by {user.full_name}! "
+                     f"Please contact them to arrange for pickup."
+            )
+        except Exception as e:
+            print(f"Failed to notify original poster: {e}")
+            
+    except Exception as e:
+        print(f"Error handling claim: {e}")
+        await query.answer("❌ An error occurred while processing your claim. Please try again.", show_alert=True)
+
+# Add all handlers
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("instructions", instructions))
 app.add_handler(CommandHandler("channel", channel))
 app.add_handler(CallbackQueryHandler(instructions, pattern="^(help_info|back_to_start)$"))
+app.add_handler(CallbackQueryHandler(handle_claim, pattern=r'^claim\|'))
 app.add_handler(conv_handler)  # Add the main conversation handler
 app.add_handler(suggest_conv)
 async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
