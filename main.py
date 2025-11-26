@@ -572,11 +572,18 @@ async def handle_suggest_time_text(update: Update, context: ContextTypes.DEFAULT
     return ConversationHandler.END
 
 # ========= CANCEL =========
+async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancel the post creation operation."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("✅ Post creation cancelled.")
+    return ConversationHandler.END
+
 async def cancel_suggest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancel the suggest time operation."""
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Time suggestion cancelled.")
+    await query.edit_message_text("❌ Time suggestion cancelled.")
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
