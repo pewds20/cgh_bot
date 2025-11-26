@@ -175,64 +175,87 @@ CHANNEL_ID = os.getenv("CHANNEL_ID", "@Sustainability_Redistribution")  # Make s
 (ITEM, QTY, SIZE, EXPIRY, LOCATION, PHOTO, CONFIRM, SUGGEST, CLAIM_QTY, CLAIM_DATE, CLAIM_CONFIRM) = range(11)
 
 # ========= CHANNEL POST UPDATER =========
-async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: str):
+async def update_channel_post(context: ContextTypes.DEFAULT_TYPE, listing_id: str) -> bool:
     """Update the channel post with current listing status."""
     try:
         listing = get_listing(listing_id)
         if not listing:
             print(f"Listing {listing_id} not found")
             return False
-            
-        # Calculate remaining quantity
-        claimed = sum(claim.get('qty', 0) for claim in listing.get('claims', []))
-        remaining = listing.get('qty', 1) - claimed
-        
-        # Prepare the message text
+
+        # Original total quantity
+        total_qty = int(listing.get('qty', 0) or 0)
+
+        # Sum ONLY approved claims
+        claims = listing.get('claims', [])
+        if isinstance(claims, dict):
+            # If somehow stored as dict, convert to list of values
+            claims_iter = claims.values()
+        else:
+            claims_iter = claims
+
+        approved_claimed = 0
+        for c in claims_iter:
+            try:
+                if c and c.get('status') == 'approved':
+                    approved_claimed += int(c.get('qty', 0) or 0)
+            except Exception as e:
+                print(f"Error reading claim qty: {e}")
+                continue
+
+        remaining = max(total_qty - approved_claimed, 0)
+
+        # Build message text
         text = (
-            f"🧾 <b>{html.escape(listing['item'])}</b>\n"
-            f"📦 Quantity: {listing['qty']} (Remaining: {remaining})\n"
-            f"📏 Size: {html.escape(listing.get('size', 'N/A'))}\n"
-            f"⏰ Expiry: {html.escape(listing.get('expiry', 'N/A'))}\n"
-            f"📍 {html.escape(listing.get('location', 'N/A'))}"
+            f"🧾 <b>{html.escape(str(listing.get('item', 'Item')))}</b>\n"
+            f"📦 Quantity: {total_qty} (Remaining: {remaining})\n"
+            f"📏 Size: {html.escape(str(listing.get('size', 'N/A')))}\n"
+            f"⏰ Expiry: {html.escape(str(listing.get('expiry', 'N/A')))}\n"
+            f"📍 {html.escape(str(listing.get('location', 'N/A')))}"
         )
-        
-        # Add claim button that opens a direct chat with the bot
+
+        # Decide keyboard
+        keyboard = None
         if remaining > 0 and listing.get('status') in ['available', 'open']:
-            bot_username = context.bot.username
-            keyboard = [
-                [InlineKeyboardButton(
-                    "🤝 Claim This Item",
-                    url=f"https://t.me/{bot_username}?start=claim_{listing_id}"
-                )]
-            ]
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton(
+                    "🤝 Claim",
+                    callback_data=f"claim|{listing_id}"
+                )
+            ]])
         else:
             text += "\n\n✅ <b>Fully Claimed!</b>"
-            keyboard = []
-            
-        reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
-        
-        # Try to update the message
+
+        # Get the correct Telegram message_id stored in Firebase
+        message_id = listing.get('channel_message_id')
+        if not message_id:
+            print(f"No channel_message_id for listing {listing_id}")
+            return False
+
         try:
-            await context.bot.edit_message_caption(
-                chat_id=CHANNEL_ID,
-                message_id=int(listing_id),
-                caption=text,
-                reply_markup=reply_markup,
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            print(f"Failed to update caption: {e}")
-            try:
-                await context.bot.edit_message_text(
+            # If the original post had a photo
+            if listing.get('photo_id'):
+                await context.bot.edit_message_caption(
                     chat_id=CHANNEL_ID,
-                    message_id=int(listing_id),
-                    text=text,
-                    reply_markup=reply_markup,
+                    message_id=message_id,
+                    caption=text,
+                    reply_markup=keyboard,
                     parse_mode="HTML"
                 )
-            except Exception as e2:
-                print(f"Failed to update message text: {e2}")
-                
+            else:
+                await context.bot.edit_message_text(
+                    chat_id=CHANNEL_ID,
+                    message_id=message_id,
+                    text=text,
+                    reply_markup=keyboard,
+                    parse_mode="HTML"
+                )
+        except Exception as e:
+            print(f"Failed to update channel message: {e}")
+            return False
+
+        return True
+
     except Exception as e:
         print(f"Error in update_channel_post: {e}")
         return False
@@ -1190,103 +1213,38 @@ app = (
     .build()
 )
 
-# Add all handlers
-async def handle_claim(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle the claim button callback in a simplified flow.
-    
-    This function processes a claim immediately when the claim button is pressed,
-    without any additional questions. It claims 1 unit of the item.
-    """
-    query = update.callback_query
-    await query.answer()
-    
-    try:
-        # Extract listing ID from callback data (format: "claim|listing_id")
-        _, listing_id = query.data.split('|')
-        user = update.effective_user
-        
-        # Get the listing from Firebase
-        listing_ref = listings_ref.child(listing_id)
-        listing = listing_ref.get()
-        
-        if not listing:
-            await query.answer("❌ This listing no longer exists.", show_alert=True)
-            return
-            
-        # Check if item is available
-        if listing.get('status') not in ['available', 'open']:
-            await query.answer("❌ This item is no longer available.", show_alert=True)
-            return
-            
-        # Check remaining quantity
-        claimed = sum(claim.get('qty', 0) for claim in listing.get('claims', []) if claim)
-        remaining = listing.get('qty', 1) - claimed
-        
-        if remaining <= 0:
-            await query.answer("❌ This item is no longer available.", show_alert=True)
-            return
-            
-        # Add claim to the listing (1 unit)
-        success = add_claim(
-            listing_id=listing_id,
-            user_id=user.id,
-            qty=1,  # Default quantity to 1
-            pickup_time="To be arranged"
-        )
-        
-        if not success:
-            await query.answer("❌ Failed to process claim. Please try again.", show_alert=True)
-            return
-            
-        # Get updated listing
-        updated_listing = get_listing(listing_id)
-        if not updated_listing:
-            await query.answer("❌ Error updating listing.", show_alert=True)
-            return
-        
-        # Update the channel post
-        await update_channel_post(context, listing_id)
-        
-        # Notify the user who claimed the item
-        await query.answer("✅ You've claimed this item! The donor will contact you soon.", show_alert=True)
-        
-        # Notify the original poster
-        try:
-            await context.bot.send_message(
-                chat_id=listing['user_id'],
-                text=f"🎉 Your item '{listing['item']}' has been claimed by {user.full_name} ({user.id})! "
-                     f"Please contact them to arrange for pickup."
-            )
-        except Exception as e:
-            print(f"Failed to notify original poster: {e}")
-            
-        # Update the channel post to show it's claimed
-        try:
-            message_id = updated_listing.get('channel_message_id')
-            if message_id:
-                status_text = "✅ <b>Claimed by @" + (user.username or user.full_name) + "</b>"
-                text = (
-                    f"🧾 <b>{updated_listing.get('item', 'Item')}</b>\n"
-                    f"{status_text}\n"
-                    f"📏 Size: {updated_listing.get('size', 'N/A')}\n"
-                    f"⏰ Expiry: {updated_listing.get('expiry', 'N/A')}\n"
-                    f"📍 {updated_listing.get('location', 'N/A')}"
-                )
-                
-                if 'photo_id' in updated_listing and updated_listing['photo_id']:
-                    await context.bot.edit_message_caption(
-                        chat_id=CHANNEL_ID,
-                        message_id=message_id,
-                        caption=text,
-                        parse_mode="HTML"
-                    )
-                else:
-                    await context.bot.edit_message_text(
-                        chat_id=CHANNEL_ID,
-                        message_id=message_id,
-                        text=text,
-                        parse_mode="HTML"
-                    )
+# Claim conversation states
+CLAIM_QTY = 0
+CLAIM_DATE = 1
+CLAIM_CONFIRM = 2
+SUGGEST = 3
+
+# Claim conversation handler
+claim_conv = ConversationHandler(
+    entry_points=[
+        CallbackQueryHandler(start_claim, pattern=r'^claim\|')
+    ],
+    states={
+        CLAIM_QTY: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, claim_quantity)
+        ],
+        CLAIM_DATE: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, claim_date)
+        ],
+        CLAIM_CONFIRM: [
+            CallbackQueryHandler(confirm_claim, pattern=r'^confirm_claim\|')
+        ],
+        SUGGEST: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggest_time_text)
+        ]
+    },
+    fallbacks=[
+        CommandHandler('cancel', cancel_claim),
+        CallbackQueryHandler(cancel_claim, pattern=r'^cancel_claim$')
+    ],
+    per_chat=True,
+    per_user=True
+)
         except Exception as e:
             print(f"Error updating channel post after claim: {e}")
             
