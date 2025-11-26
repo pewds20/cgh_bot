@@ -343,36 +343,37 @@ async def channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     instructions_text = (
-        "ℹ️ <b>How It Works</b>\n\n"
-        "1. Use /newitem to post excess items.\n"
-        "2. Your item will appear in the Redistribution Channel.\n"
-        "3. Others can claim and coordinate pickup.\n"
-        "4. You'll be notified when someone claims your item.\n\n"
-        "<b>Important Notes:</b>\n"
-        "• The bot may experience occasional technical difficulties\n"
-        "• If the bot is unresponsive, please post directly in the channel\n"
-        "• Manual coordination may be needed if automated features fail\n"
-        "• Always double-check pickup details with the other party\n\n"
-        "To get started, just type: /newitem"
+        "<b>📋 How to List an Item for Donation</b>\n\n"
+        "1. Type <b>/newitem</b> to start the listing process\n"
+        "2. You'll be asked for the following details:\n"
+        "   • <b>Item name</b>: What are you donating?\n"
+        "   • <b>Quantity</b>: How many units/boxes?\n"
+        "   • <b>Size/Volume</b>: (Type 'na' if not applicable)\n"
+        "   • <b>Expiry date</b>: (If applicable, format: DD/MM/YYYY)\n"
+        "   • <b>Location</b>: Where can it be picked up?\n"
+        "   • <b>Photo</b>: Please provide a clear photo of the item\n\n"
+        "3. Your item will be posted in the @Sustainability_Redistribution channel\n"
+        "4. Others can claim items by clicking the 'Claim' button\n"
+        "5. You'll be notified when someone claims your item\n\n"
+        "<b>💡 Quick Start:</b> Just type <b>/newitem</b> to begin listing an item!\n\n"
+        "<b>⚠️ Important Note:</b>\n"
+        "• This bot may experience occasional technical difficulties.\n"
+        "• If the bot is unresponsive, please post directly in the channel.\n"
+        "• Manual coordination may be required if automated features fail.\n"
+        "• Always verify pickup details with the other party."
     )
     
-    keyboard = [
-        [InlineKeyboardButton("📝 List New Item", callback_data="newitem_btn")],
-        [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="back_to_start")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
     if update.callback_query:
-        await update.callback_query.edit_message_text(
-            instructions_text,
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
+        query = update.callback_query
+        await query.answer()
+        await query.edit_message_text(
+            text=instructions_text,
+            parse_mode="HTML"
         )
     else:
         await update.message.reply_text(
-            instructions_text,
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
+            text=instructions_text,
+            parse_mode="HTML"
         )
     return ConversationHandler.END
 
@@ -498,7 +499,7 @@ async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle skipping the photo upload."""
     context.user_data['photo_id'] = None
     
-    # Prepare the confirmation message
+    # Prepare the confirmation message with disclaimer
     item_info = (
         f"📝 *Confirm Your Listing*\n\n"
         f"*Item:* {context.user_data.get('item', 'N/A')}\n"
@@ -507,7 +508,12 @@ async def skip_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"*Expiry:* {context.user_data.get('expiry', 'N/A')}\n"
         f"*Location:* {context.user_data.get('location', 'N/A')}\n"
         f"*Photo:* None\n\n"
-        "Please confirm if these details are correct:"
+        "⚠️ *Disclaimer:* By confirming, you agree that:\n"
+        "• The item is in good condition and safe for use\n"
+        "• You have the authority to donate this item\n"
+        "• You'll arrange for pickup within 48 hours\n"
+        "• You'll update the status if the item is no longer available\n\n"
+        "*Please confirm if these details are correct:*"
     )
     
     keyboard = [
