@@ -393,10 +393,8 @@ async def newitem(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = update.callback_query.message
     
     await message.reply_text(
-        "🏥 *CGH Surplus Redistribution*\n\n"
-        "📦 What item would you like to list?\n"
-        "Example: \"5x Boxes of Gloves\" or \"10x 500ml Hand Sanitizers\"\n\n"
-        "Please include the quantity and item name.",
+        "📦 What item are you donating?\n"
+        "Example: \"Gloves\" or \"Hand Sanitizer\"",
         parse_mode="Markdown"
     )
     return ITEM
@@ -405,8 +403,7 @@ async def ask_qty(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Store item name and ask for quantity."""
     context.user_data['item'] = update.message.text
     await update.message.reply_text(
-        "🔢 *Quantity Available*\n\n"
-        "How many of these items are available?\n"
+        "🔢 How many boxes or units are available?\n"
         "Example: \"5\" or \"10\"",
         parse_mode="Markdown"
     )
@@ -415,35 +412,28 @@ async def ask_qty(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ask_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Store quantity and ask for size/description."""
     try:
-        qty = int(update.message.text)
+        qty = int(update.message.text.strip())
         if qty <= 0:
-            raise ValueError("Quantity must be positive")
+            await update.message.reply_text("❌ Please enter a number greater than 0.")
+            return QTY
         context.user_data['qty'] = qty
-        await update.message.reply_text(
-            "📏 *Item Details*\n\n"
-            "Please provide more details about the item:\n"
-            "• Size (e.g., S/M/L/XL)\n"
-            "• Weight (e.g., 100g, 1kg)\n"
-            "• Or any other relevant details",
-            parse_mode="Markdown"
-        )
-        return SIZE
     except ValueError:
-        await update.message.reply_text(
-            "❌ Please enter a valid positive number for quantity."
-        )
+        await update.message.reply_text("❌ Please enter a valid number.")
         return QTY
+    
+    await update.message.reply_text(
+        "📏 What is the size? (Type 'na' if not applicable)",
+        parse_mode="Markdown"
+    )
+    return SIZE
 
 async def ask_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Store size/description and ask for expiry."""
-    context.user_data['size'] = update.message.text
+    size = update.message.text.strip()
+    context.user_data['size'] = size if size.lower() != 'na' else 'Not applicable'
+    
     await update.message.reply_text(
-        "📅 *Expiry Date*\n\n"
-        "When does this item expire?\n"
-        "• Enter a date (DD/MM/YYYY or YYYY-MM-DD)\n"
-        "• Or type 'N/A' if not applicable\n\n"
-        "Example: 31/12/2023 or N/A",
-        parse_mode="Markdown"
+        "📅 Enter expiry date (DD/MM/YYYY) or type 'na' if not applicable"
     )
     return EXPIRY
 
@@ -471,27 +461,17 @@ async def handle_expiry_text(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return EXPIRY
     
     await update.message.reply_text(
-        "📍 *Pickup Location*\n\n"
-        "Where can the item be collected from?\n"
-        "Example: \"CGH Main Lobby\" or \"Level 3 Pantry, Tower A\"\n\n"
-        "Please be specific about the location within CGH.",
-        parse_mode="Markdown"
+        "📍 Where is the pickup location?"
     )
     return LOCATION
 
 async def ask_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Store location and ask for photo."""
-    context.user_data['location'] = update.message.text
-    
-    keyboard = [[InlineKeyboardButton("Skip Photo", callback_data="skip_photo")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    location = update.message.text.strip()
+    context.user_data['location'] = location
     
     await update.message.reply_text(
-        "📸 *Item Photo*\n\n"
-        "Please send a clear photo of the item. This helps others see the condition.\n\n"
-        "You can skip this step if needed.",
-        reply_markup=reply_markup,
-        parse_mode="Markdown"
+        "📸 Please send a photo of the item or type 'skip' if none"
     )
     return PHOTO
 
