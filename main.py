@@ -1071,6 +1071,38 @@ async def channel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Open the redistribution channel:", reply_markup=keyboard)
 
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a message when the command /help is issued."""
+    help_text = (
+        "🤖 <b>CGH Sustainability Bot - Help</b>\n\n"
+        "<b>Available Commands:</b>\n"
+        "• /start - Show the main menu\n"
+        "• /newitem - List a new item for donation\n"
+        "• /help - Show this help message\n"
+        "• /cancel - Cancel the current operation\n\n"
+        "<b>How to Use:</b>\n"
+        "1. Use /newitem to list an item for donation\n"
+        "2. Others can claim items by clicking the 'Claim' button\n"
+        "3. You'll be notified when someone claims your item\n"
+        "4. Use the buttons to approve/reject claims\n\n"
+        "<b>Need more help?</b> Contact the admin for assistance."
+    )
+    
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        await query.edit_message_text(
+            text=help_text,
+            parse_mode="HTML"
+        )
+    else:
+        await update.message.reply_text(
+            text=help_text,
+            parse_mode="HTML"
+        )
+    
+    return ConversationHandler.END
+
 async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     instructions_text = (
         "<b>📋 How to List an Item for Donation</b>\n\n"
@@ -1424,7 +1456,9 @@ conv_handler = ConversationHandler(
         ]
     },
     fallbacks=[CommandHandler("cancel", cancel)],
-    per_message=False
+    per_message=True,  # Enable per-message tracking for better callback query handling
+    per_chat=True,
+    per_user=True
 )
 
 async def suggest_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1511,7 +1545,7 @@ claim_conv = ConversationHandler(
         CommandHandler('cancel', cancel_claim),
         CallbackQueryHandler(cancel_claim, pattern=r'^cancel_claim$')
     ],
-    per_message=False,
+    per_message=True,  # Enable per-message tracking for better callback query handling
     per_chat=True,
     per_user=True
 )
@@ -1529,7 +1563,7 @@ suggest_conv = ConversationHandler(
     fallbacks=[
         CallbackQueryHandler(cancel_suggest, pattern=r'^cancel_suggest\|')
     ],
-    per_message=False,
+    per_message=True,  # Enable per-message tracking for better callback query handling
     per_chat=True,
     per_user=True
 )
