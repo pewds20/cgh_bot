@@ -1103,6 +1103,43 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return ConversationHandler.END
 
+async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all available items."""
+    try:
+        listings_ref = db.reference('listings')
+        listings = listings_ref.get() or {}
+        
+        if not listings:
+            await update.message.reply_text("No items available at the moment. Check back later!")
+            return
+            
+        message = "🛍️ <b>Available Items:</b>\n\n"
+        
+        for item_id, item in listings.items():
+            if item.get('status') != 'available':
+                continue
+                
+            message += (
+                f"🍽️ <b>{item.get('item', 'Item')}</b>\n"
+                f"• Quantity: {item.get('qty', 1)}\n"
+                f"• Size: {item.get('size', 'Not specified')}\n"
+                f"• Expiry: {item.get('expiry', 'N/A')}\n"
+                f"• Location: {item.get('location', 'Not specified')}\n\n"
+            )
+            
+        await update.message.reply_text(
+            text=message,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_list")],
+                [InlineKeyboardButton("📝 List New Item", callback_data="newitem_btn")]
+            ])
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in list_command: {e}")
+        await update.message.reply_text("❌ An error occurred while fetching the item list. Please try again later.")
+
 async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     instructions_text = (
         "<b>📋 How to List an Item for Donation</b>\n\n"
@@ -1586,6 +1623,45 @@ app.add_handler(CallbackQueryHandler(handle_claim_action, pattern=r'^(approve_cl
 
 # Handle channel posts
 app.add_handler(MessageHandler(filters.ChatType.CHANNEL, channel))
+
+async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all available items."""
+    try:
+        listings_ref = db.reference('listings')
+        listings = listings_ref.get() or {}
+        
+        if not listings:
+            await update.message.reply_text("No items available at the moment. Check back later!")
+            return
+            
+        message = "🛍️ <b>Available Items:</b>\n\n"
+        
+        for item_id, item in listings.items():
+            if item.get('status') != 'available':
+                continue
+                
+            message += (
+                f"🍽️ <b>{item.get('item', 'Item')}</b>\n"
+                f"• Quantity: {item.get('qty', 1)}\n"
+                f"• Size: {item.get('size', 'Not specified')}\n"
+                f"• Expiry: {item.get('expiry', 'N/A')}\n"
+                f"• Location: {item.get('location', 'Not specified')}\n"
+                "\n"
+            )
+            
+        await update.message.reply_text(
+            text=message,
+            parse_mode='HTML',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Refresh", callback_data="refresh_list")],
+                [InlineKeyboardButton("📝 List New Item", callback_data="newitem_btn")]
+            ])
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in list_command: {e}")
+        await update.message.reply_text("❌ An error occurred while fetching the item list. Please try again later.")
+
 async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle private messages that don't match any command."""
     await update.message.reply_text(
