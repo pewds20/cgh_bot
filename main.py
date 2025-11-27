@@ -161,15 +161,25 @@ def run_web_server():
     app_keepalive.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 def keep_alive():
-    # Only start the web server in a separate thread if not on Render
+    """Start a simple web server for health checks."""
+    from threading import Thread
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    def run():
+        port = int(os.environ.get('PORT', 10000))
+        logger.info(f"🌐 Starting web server on port {port}")
+        try:
+            app_keepalive.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
+        except Exception as e:
+            logger.error(f"Web server error: {e}")
+    
+    # Only start in a separate thread if not on Render
     if not os.environ.get('RENDER'):
-        from threading import Thread
-        t = Thread(target=run_web_server, daemon=True)
+        t = Thread(target=run, daemon=True)
         t.start()
-        print("Started web server in background thread")
-    else:
-        # On Render, we'll start the web server in the main thread after starting the bot
-        print("Running on Render - web server will start after bot initialization")
+        logger.info("Started web server in background thread")
 
 # ========= CONFIG =========
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8377427445:AAE-H_EiGAjs4NKE20v9S8zFLOv2AiHKcpU")
@@ -1561,30 +1571,43 @@ print("🤖 Bot starting with Firebase persistence + keep-alive + auto-archive .
 
 # Initialize listings from Firebase on startup
 if __name__ == "__main__":
-    if not refresh_listings():
-        print("⚠️ Warning: Could not load initial listings from Firebase")
-    
-    # Start the keep-alive server (in a separate thread if not on Render)
     import os
-    keep_alive()
     
-    # Start the bot
-    print("Starting bot...")
+    # Set up logging
+    logging.basicConfig(
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=logging.INFO
+    )
+    logger = logging.getLogger(__name__)
     
-    if os.environ.get('RENDER'):
+    # Load initial listings
+    if not refresh_listings():
+        logger.warning("⚠️ Could not load initial listings from Firebase")
+    
+    # Check if running on Render
+    is_render = os.environ.get('RENDER') is not None
+    
+    if is_render:
+        logger.info("🚀 Running in Render environment")
+        
         # On Render, we need to run both the bot and web server
         import threading
         
-        # Start the bot in a separate thread
-        def run_bot():
-            app.run_polling(drop_pending_updates=True)
+        # Start the web server in a separate thread
+        def run_web_server_thread():
+            port = int(os.environ.get('PORT', 10000))
+            logger.info(f"🌐 Starting web server on port {port}")
+            app_keepalive.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
         
-        bot_thread = threading.Thread(target=run_bot, daemon=True)
-        bot_thread.start()
+        web_thread = threading.Thread(target=run_web_server_thread, daemon=True)
+        web_thread.start()
         
-        # Start the web server in the main thread (required for Render)
-        print("Starting web server in main thread...")
-        run_web_server()
+        # Start the bot in the main thread
+        logger.info("🤖 Starting bot in main thread...")
+        app.run_polling(drop_pending_updates=True)
     else:
-        # Local development - just run the bot
+        # Local development - just run the bot with a simple web server
+        logger.info("🖥️  Running in local development mode")
+        keep_alive()
+        logger.info("🤖 Starting bot...")
         app.run_polling(drop_pending_updates=True)
