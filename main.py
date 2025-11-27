@@ -296,93 +296,77 @@ async def start_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             await query.answer("❌ Invalid claim request. Please try again.", show_alert=True)
             return ConversationHandler.END
             
-        await query.answer()
+        # Get the listing from Firebase
+        listing = get_listing(listing_id)
+        print(f"[DEBUG] Retrieved listing: {listing}")
         
-        # Debug: Print the callback data
-        print(f"[DEBUG] Callback data received: {query.data}")
-        
-        # Extract listing ID from callback data (format: "claim|listing_id")
-        try:
-            _, listing_id = query.data.split('|')
-            print(f"[DEBUG] Extracted listing ID: {listing_id}")
-            if not listing_id:
-                raise ValueError("Empty listing ID")
-        except ValueError as ve:
-            print(f"[ERROR] Error processing listing ID: {ve}")
-            await query.answer("❌ Invalid claim request. Please try again.", show_alert=True)
+        if not listing:
+            print("[ERROR] Listing not found in database")
+            await query.answer("❌ This listing is no longer available.", show_alert=True)
             return ConversationHandler.END
             
-        # Get the listing from Firebase
+        # Calculate remaining quantity
         try:
-            listing = get_listing(listing_id)
-            print(f"[DEBUG] Retrieved listing: {listing}")
+            claims = listing.get('claims', [])
+            if not isinstance(claims, list):
+                claims = []
+            claimed = sum(int(claim.get('qty', 0)) for claim in claims if claim and isinstance(claim, dict))
+            remaining = int(listing.get('qty', 0)) - claimed
+            print(f"[DEBUG] Remaining quantity: {remaining}")
+        except (ValueError, TypeError) as te:
+            print(f"[ERROR] Error calculating remaining quantity: {te}")
+            await query.answer("❌ Error processing item quantity. Please try another item.", show_alert=True)
+            return ConversationHandler.END
+        
+        # Check if item can be claimed
+        if remaining <= 0 or listing.get('status') not in ['available', 'open']:
+            status = listing.get('status', 'unknown')
+            print(f"[INFO] Item not available for claiming. Status: {status}, Remaining: {remaining}")
+            await query.answer("❌ This item is no longer available for claiming.", show_alert=True)
+            return ConversationHandler.END
             
-            if not listing:
-                print("[ERROR] Listing not found in database")
-                await query.answer("❌ This listing is no longer available.", show_alert=True)
-                return ConversationHandler.END
-                
-            # Calculate remaining quantity
-            try:
-                claims = listing.get('claims', [])
-                if not isinstance(claims, list):
-                    claims = []
-                claimed = sum(int(claim.get('qty', 0)) for claim in claims if claim and isinstance(claim, dict))
-                remaining = int(listing.get('qty', 0)) - claimed
-                print(f"[DEBUG] Remaining quantity: {remaining}")
-            except (ValueError, TypeError) as te:
-                print(f"[ERROR] Error calculating remaining quantity: {te}")
-                await query.answer("❌ Error processing item quantity. Please try another item.", show_alert=True)
-                return ConversationHandler.END
-            
-            # Check if item can be claimed
-            if remaining <= 0 or listing.get('status') not in ['available', 'open']:
-                status = listing.get('status', 'unknown')
-                print(f"[INFO] Item not available for claiming. Status: {status}, Remaining: {remaining}")
-                await query.answer("❌ This item is no longer available for claiming.", show_alert=True)
-                return ConversationHandler.END
-                
-            # Store listing info in user data
-            context.user_data.clear()  # Clear any existing data
-            context.user_data['claim_listing_id'] = listing_id
-            context.user_data['max_qty'] = remaining
-            context.user_data['listing_item'] = listing.get('item', 'Item')
-            
-            print(f"[DEBUG] User data set: {context.user_data}")
-            
-            # Ask for quantity with clear instructions
-            try:
-                item_name = listing.get('item', 'Item')
-                await query.message.reply_text(
-                    f"📦 <b>Claiming:</b> {html.escape(item_name)}\n"
-                    f"🔢 <b>Available:</b> {remaining}\n\n"
-                    "<b>How many would you like to claim?</b>\n"
-                    "• Just type the number (e.g., '5' or 'five')\n"
-                    "• Include units if needed (e.g., '5 boxes' or 'three pieces')\n"
-                    "• Supports words (e.g., 'two', 'ten', 'twenty five')\n\n"
-                    "<i>Type /cancel to stop</i>",
-                    parse_mode='HTML',
-                    reply_markup=ReplyKeyboardRemove()
-                )
-                print("[DEBUG] Successfully sent quantity prompt")
-                return CLAIM_QTY
-                    
-            except Exception as e:
-                print(f"[ERROR] Error sending quantity prompt: {e}")
-                await query.answer("❌ Failed to start claim process. Please try again.", show_alert=True)
-                return ConversationHandler.END
+        # Store listing info in user data
+        context.user_data.clear()  # Clear any existing data
+        context.user_data['claim_listing_id'] = listing_id
+        context.user_data['max_qty'] = remaining
+        context.user_data['listing_item'] = listing.get('item', 'Item')
+        
+        print(f"[DEBUG] User data set: {context.user_data}")
+        
+        # Ask for quantity with clear instructions
+        try:
+            item_name = listing.get('item', 'Item')
+            await query.message.reply_text(
+                f"📦 <b>Claiming:</b> {html.escape(item_name)}\n"
+                f"🔢 <b>Available:</b> {remaining}\n\n"
+                "<b>How many would you like to claim?</b>\n"
+                "• Just type the number (e.g., '5' or 'five')\n"
+                "• Include units if needed (e.g., '5 boxes' or 'three pieces')\n"
+                "• Supports words (e.g., 'two', 'ten', 'twenty five')\n\n"
+                "<i>Type /cancel to stop</i>",
+                parse_mode='HTML',
+                reply_markup=ReplyKeyboardRemove()
+            )
+            print("[DEBUG] Successfully sent quantity prompt")
+            return CLAIM_QTY
                 
         except Exception as e:
-            error_details = traceback.format_exc()
-            print(f"[CRITICAL] Unhandled error in start_claim: {e}\n{error_details}")
-            try:
-                if query:
-                    await query.answer("❌ An unexpected error occurred. Please try again.", show_alert=True)
-                elif update.message:
-                    await update.message.reply_text("❌ An error occurred. Please try again.")
-            except Exception as inner_e:
-                print(f"[ERROR] Failed to send error message: {inner_e}")
+            print(f"[ERROR] Error sending quantity prompt: {e}")
+            await query.answer("❌ Failed to start claim process. Please try again.", show_alert=True)
             return ConversationHandler.END
+            
+    except Exception as e:
+        error_details = traceback.format_exc()
+        print(f"[CRITICAL] Unhandled error in start_claim: {e}\n{error_details}")
+        try:
+            if query:
+                await query.answer("❌ An unexpected error occurred. Please try again.", show_alert=True)
+            elif update.message:
+                await update.message.reply_text("❌ An error occurred. Please try again.")
+        except Exception as inner_e:
+            print(f"[ERROR] Failed to send error message: {inner_e}")
+        return ConversationHandler.END
+
 
 def extract_quantity(text: str) -> Optional[int]:
     """Extract a quantity from text, handling both digits and words."""
