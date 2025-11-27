@@ -351,38 +351,38 @@ async def start_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             print(f"[DEBUG] User data set: {context.user_data}")
             
             # Ask for quantity with clear instructions
-        try:
-            item_name = listing.get('item', 'Item')
-            await query.message.reply_text(
-                f"📦 <b>Claiming:</b> {html.escape(item_name)}\n"
-                f"🔢 <b>Available:</b> {remaining}\n\n"
-                "<b>How many would you like to claim?</b>\n"
-                "• Just type the number (e.g., '5' or 'five')\n"
-                "• Include units if needed (e.g., '5 boxes' or 'three pieces')\n"
-                "• Supports words (e.g., 'two', 'ten', 'twenty five')\n\n"
-                "<i>Type /cancel to stop</i>",
-                parse_mode='HTML',
-                reply_markup=ReplyKeyboardRemove()
-            )
-            print("[DEBUG] Successfully sent quantity prompt")
-            return CLAIM_QTY
+            try:
+                item_name = listing.get('item', 'Item')
+                await query.message.reply_text(
+                    f"📦 <b>Claiming:</b> {html.escape(item_name)}\n"
+                    f"🔢 <b>Available:</b> {remaining}\n\n"
+                    "<b>How many would you like to claim?</b>\n"
+                    "• Just type the number (e.g., '5' or 'five')\n"
+                    "• Include units if needed (e.g., '5 boxes' or 'three pieces')\n"
+                    "• Supports words (e.g., 'two', 'ten', 'twenty five')\n\n"
+                    "<i>Type /cancel to stop</i>",
+                    parse_mode='HTML',
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                print("[DEBUG] Successfully sent quantity prompt")
+                return CLAIM_QTY
+                    
+            except Exception as e:
+                print(f"[ERROR] Error sending quantity prompt: {e}")
+                await query.answer("❌ Failed to start claim process. Please try again.", show_alert=True)
+                return ConversationHandler.END
                 
         except Exception as e:
-            print(f"[ERROR] Error sending quantity prompt: {e}")
-            await query.answer("❌ Failed to start claim process. Please try again.", show_alert=True)
+            error_details = traceback.format_exc()
+            print(f"[CRITICAL] Unhandled error in start_claim: {e}\n{error_details}")
+            try:
+                if query:
+                    await query.answer("❌ An unexpected error occurred. Please try again.", show_alert=True)
+                elif update.message:
+                    await update.message.reply_text("❌ An error occurred. Please try again.")
+            except Exception as inner_e:
+                print(f"[ERROR] Failed to send error message: {inner_e}")
             return ConversationHandler.END
-        
-    except Exception as e:
-        error_details = traceback.format_exc()
-        print(f"[CRITICAL] Unhandled error in start_claim: {e}\n{error_details}")
-        try:
-            if query:
-                await query.answer("❌ An unexpected error occurred. Please try again.", show_alert=True)
-            elif update.message:
-                await update.message.reply_text("❌ An error occurred. Please try again.")
-        except Exception as inner_e:
-            print(f"[ERROR] Failed to send error message: {inner_e}")
-        return ConversationHandler.END
 
 def extract_quantity(text: str) -> Optional[int]:
     """Extract a quantity from text, handling both digits and words."""
