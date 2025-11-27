@@ -351,29 +351,25 @@ async def start_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             print(f"[DEBUG] User data set: {context.user_data}")
             
             # Ask for quantity with clear instructions
-            try:
-                item_name = listing.get('item', 'Item')
-                await query.message.reply_text(
-                    f"📦 <b>Claiming:</b> {html.escape(item_name)}\n"
-                    f"🔢 <b>Available:</b> {remaining}\n\n"
-                    "<b>How many would you like to claim?</b>\n"
-                    "• Just type the number (e.g., '5')\n"
-                    "• Or include units (e.g., '5 boxes' or '3 pieces')\n\n"
-                    "<i>Type /cancel to stop</i>",
-                    parse_mode='HTML',
-                    reply_markup=ReplyKeyboardRemove()
-                )
-                print("[DEBUG] Successfully sent quantity prompt")
-                return CLAIM_QTY
-                
-            except Exception as e:
-                print(f"[ERROR] Error sending quantity prompt: {e}")
-                await query.answer("❌ Failed to start claim process. Please try again.", show_alert=True)
-                return ConversationHandler.END
+        try:
+            item_name = listing.get('item', 'Item')
+            await query.message.reply_text(
+                f"📦 <b>Claiming:</b> {html.escape(item_name)}\n"
+                f"🔢 <b>Available:</b> {remaining}\n\n"
+                "<b>How many would you like to claim?</b>\n"
+                "• Just type the number (e.g., '5' or 'five')\n"
+                "• Include units if needed (e.g., '5 boxes' or 'three pieces')\n"
+                "• Supports words (e.g., 'two', 'ten', 'twenty five')\n\n"
+                "<i>Type /cancel to stop</i>",
+                parse_mode='HTML',
+                reply_markup=ReplyKeyboardRemove()
+            )
+            print("[DEBUG] Successfully sent quantity prompt")
+            return CLAIM_QTY
                 
         except Exception as e:
-            print(f"[ERROR] Error accessing Firebase: {e}")
-            await query.answer("❌ Error accessing item information. Please try again.", show_alert=True)
+            print(f"[ERROR] Error sending quantity prompt: {e}")
+            await query.answer("❌ Failed to start claim process. Please try again.", show_alert=True)
             return ConversationHandler.END
         
     except Exception as e:
@@ -387,8 +383,69 @@ async def start_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         except Exception as inner_e:
             print(f"[ERROR] Failed to send error message: {inner_e}")
         return ConversationHandler.END
-        # Remove any non-digit characters and convert to int
-        return int(''.join(filter(str.isdigit, text)))
+
+def extract_quantity(text: str) -> Optional[int]:
+    """Extract a quantity from text, handling both digits and words."""
+    if not text or not isinstance(text, str):
+        return None
+        
+    # Remove any leading/trailing whitespace and convert to lowercase
+    text = text.strip().lower()
+    
+    # First try to extract a number from the text
+    try:
+        # Try direct conversion first
+        return int(text)
+    except (ValueError, TypeError):
+        pass
+        
+    # Try to extract digits from the text
+    digits = ''.join(filter(str.isdigit, text))
+    if digits:
+        return int(digits)
+    
+    # Word to number mapping
+    word_to_num = {
+        'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4,
+        'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9,
+        'ten': 10, 'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
+        'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18, 'nineteen': 19,
+        'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50,
+        'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90,
+        'hundred': 100, 'thousand': 1000, 'million': 1000000
+    }
+    
+    # Split text into words and remove any non-alphabetic characters
+    words = [''.join(filter(str.isalpha, word)) for word in text.split()]
+    words = [word for word in words if word]
+    
+    if not words:
+        return None
+        
+    # Try to convert word numbers to digits
+    try:
+        # Simple case: single word number (e.g., "five", "ten")
+        if words[0] in word_to_num:
+            return word_to_num[words[0]]
+            
+        # Handle compound numbers (e.g., "twenty five")
+        result = 0
+        current = 0
+        
+        for word in words:
+            if word in word_to_num:
+                val = word_to_num[word]
+                if val >= 100:
+                    current = current * val if current != 0 else val
+                else:
+                    current += val
+        
+        # Handle the case where we have a final addition (e.g., "one hundred and five")
+        if current > 0:
+            result += current
+            
+        return result if result > 0 else None
+        
     except (ValueError, TypeError):
         return None
 
@@ -402,10 +459,16 @@ async def claim_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         user_input = update.message.text.strip()
         qty = extract_quantity(user_input)
         
-        if qty is None:
+        # Debug: Print the extracted quantity
+        print(f"[DEBUG] Raw input: '{user_input}' -> Extracted quantity: {qty}")
+        
+        if qty is None or qty <= 0:
             await update.message.reply_text(
-                "❌ I couldn't find a valid number in your input. "
-                "Please enter a number (e.g., '5' or '5 boxes')."
+                "❌ I couldn't find a valid number in your input.\n\n"
+                "Please enter a valid quantity, for example:\n"
+                "• A number: '5' or '10'\n"
+                "• A word: 'five' or 'ten'\n"
+                "• With units: '5 boxes' or 'three pieces'"
             )
             return CLAIM_QTY
             
