@@ -150,20 +150,36 @@ app_keepalive = Flask(__name__)
 def home():
     return "Bot is running!"
 
+# Health check endpoint for Render
+@app_keepalive.route('/health')
+def health_check():
+    return "OK", 200
+
 def run():
     port = int(os.environ.get('PORT', 8000))
-    # Use waitress as production server for better performance
-    from waitress import serve
-    serve(app_keepalive, host='0.0.0.0', port=port, threads=4)
+    print(f"Starting server on port {port}")
+    
+    # In production, use waitress as production server
+    if os.environ.get('RENDER', '').lower() == 'true':
+        from waitress import serve
+        print("Running with Waitress server")
+        serve(app_keepalive, host='0.0.0.0', port=port, threads=4)
+    else:
+        # For local development
+        app_keepalive.run(host='0.0.0.0', port=port, debug=False)
 
 # Global variable to track if the keep-alive thread is running
 _keep_alive_thread = None
 
 def keep_alive():
     global _keep_alive_thread
-    # Only start the keep-alive server if not running in a worker process
-    # and if the thread hasn't been started yet
-    if os.environ.get('WORKER') != '1' and (_keep_alive_thread is None or not _keep_alive_thread.is_alive()):
+    # In Render, we want to run the server in the main thread
+    if os.environ.get('RENDER', '').lower() == 'true':
+        print("Running in Render environment - starting server in main thread")
+        run()
+    # For non-Render environments, use a separate thread
+    elif os.environ.get('WORKER') != '1' and (_keep_alive_thread is None or not _keep_alive_thread.is_alive()):
+        print("Starting keep-alive server in background thread")
         _keep_alive_thread = Thread(target=run, daemon=True)
         _keep_alive_thread.start()
 
@@ -369,50 +385,77 @@ async def start_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 
 def extract_quantity(text: str) -> Optional[int]:
-    """Extract a quantity from text, handling both digits and words."""
+    """Extract a quantity from text, handling both digits and words.
+    
+    Supports:
+    - Direct numbers: '5', '10', '42'
+    - Word numbers: 'five', 'ten', 'twenty five'
+    - Mixed with units: '5 boxes', 'three pieces'
+    - Compound numbers: 'one hundred twenty five'
+    """
     if not text or not isinstance(text, str):
         return None
         
     # Remove any leading/trailing whitespace and convert to lowercase
     text = text.strip().lower()
     
-    # First try to extract a number from the text
+    # First try to extract a number from the text (direct number or digits in text)
     try:
-        # Try direct conversion first
+        # Try direct conversion first (e.g., '5' or '42')
         return int(text)
     except (ValueError, TypeError):
         pass
         
-    # Try to extract digits from the text
+    # Try to extract digits from the text (e.g., '5 boxes' -> '5')
     digits = ''.join(filter(str.isdigit, text))
     if digits:
         return int(digits)
     
-    # Word to number mapping
+    # Word to number mapping with expanded word list
     word_to_num = {
+        # Basic numbers
         'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4,
         'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9,
         'ten': 10, 'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
         'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18, 'nineteen': 19,
         'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50,
         'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90,
-        'hundred': 100, 'thousand': 1000, 'million': 1000000
+        # Multipliers
+        'hundred': 100, 'thousand': 1000, 'million': 1000000,
+        # Common variations and typos
+        'fith': 5, 'for': 4, 'to': 2, 'too': 2, 'tree': 3, 'forteen': 14,
+        'fiveteen': 15, 'fivety': 50, 'ninty': 90
     }
     
-    # Split text into words and remove any non-alphabetic characters
-    words = [''.join(filter(str.isalpha, word)) for word in text.split()]
-    words = [word for word in words if word]
+    # Common unit words to ignore
+    units = {
+        'a', 'an', 'the', 'of', 'and', 'or', 'in', 'on', 'at', 'for', 'with',
+        'piece', 'pieces', 'box', 'boxes', 'item', 'items', 'unit', 'units',
+        'pack', 'packs', 'bottle', 'bottles', 'bag', 'bags', 'set', 'sets'
+    }
+    
+    # Split text into words and clean them
+    words = []
+    for word in text.split():
+        # Remove any non-alphabetic characters and convert to lowercase
+        clean_word = ''.join(filter(str.isalpha, word)).lower()
+        if clean_word and clean_word not in units:  # Skip empty words and units
+            words.append(clean_word)
     
     if not words:
         return None
-        
+    
+    # Handle special cases
+    if words[0] in ['a', 'an']:
+        return 1
+    
     # Try to convert word numbers to digits
     try:
         # Simple case: single word number (e.g., "five", "ten")
         if words[0] in word_to_num:
             return word_to_num[words[0]]
             
-        # Handle compound numbers (e.g., "twenty five")
+        # Handle compound numbers (e.g., "twenty five", "one hundred twenty five")
         result = 0
         current = 0
         
@@ -420,17 +463,26 @@ def extract_quantity(text: str) -> Optional[int]:
             if word in word_to_num:
                 val = word_to_num[word]
                 if val >= 100:
-                    current = current * val if current != 0 else val
+                    # Handle multipliers (hundred, thousand, etc.)
+                    if current == 0:
+                        current = val
+                    else:
+                        current *= val
+                    # Add to result and reset current
+                    result += current
+                    current = 0
                 else:
                     current += val
         
-        # Handle the case where we have a final addition (e.g., "one hundred and five")
-        if current > 0:
-            result += current
-            
+        # Add any remaining current value to result
+        result += current
+        
+        # Return the result if it's a positive number
         return result if result > 0 else None
         
-    except (ValueError, TypeError):
+    except (ValueError, TypeError) as e:
+        print(f"[DEBUG] Error converting words to number: {e}")
+        return None
         return None
 
 async def claim_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
