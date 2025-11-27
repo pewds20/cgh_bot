@@ -144,44 +144,32 @@ def save_listings():
     return True
 
 # ========= KEEP-ALIVE SERVER =========
+# Simple Flask app for Render's health checks
 app_keepalive = Flask(__name__)
 
 @app_keepalive.route('/')
 def home():
     return "Bot is running!"
 
-# Health check endpoint for Render
 @app_keepalive.route('/health')
 def health_check():
     return "OK", 200
 
-def run():
-    port = int(os.environ.get('PORT', 8000))
-    print(f"Starting server on port {port}")
-    
-    # In production, use waitress as production server
-    if os.environ.get('RENDER', '').lower() == 'true':
-        from waitress import serve
-        print("Running with Waitress server")
-        serve(app_keepalive, host='0.0.0.0', port=port, threads=4)
-    else:
-        # For local development
-        app_keepalive.run(host='0.0.0.0', port=port, debug=False)
-
-# Global variable to track if the keep-alive thread is running
-_keep_alive_thread = None
+def run_web_server():
+    port = int(os.environ.get('PORT', 10000))
+    print(f"Starting web server on port {port}")
+    app_keepalive.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
 
 def keep_alive():
-    global _keep_alive_thread
-    # In Render, we want to run the server in the main thread
-    if os.environ.get('RENDER', '').lower() == 'true':
-        print("Running in Render environment - starting server in main thread")
-        run()
-    # For non-Render environments, use a separate thread
-    elif os.environ.get('WORKER') != '1' and (_keep_alive_thread is None or not _keep_alive_thread.is_alive()):
-        print("Starting keep-alive server in background thread")
-        _keep_alive_thread = Thread(target=run, daemon=True)
-        _keep_alive_thread.start()
+    # Only start the web server in a separate thread if not on Render
+    if not os.environ.get('RENDER'):
+        from threading import Thread
+        t = Thread(target=run_web_server, daemon=True)
+        t.start()
+        print("Started web server in background thread")
+    else:
+        # On Render, we'll start the web server in the main thread after starting the bot
+        print("Running on Render - web server will start after bot initialization")
 
 # ========= CONFIG =========
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8377427445:AAE-H_EiGAjs4NKE20v9S8zFLOv2AiHKcpU")
@@ -1593,14 +1581,27 @@ if __name__ == "__main__":
     if not refresh_listings():
         print("⚠️ Warning: Could not load initial listings from Firebase")
     
-    # Start the keep-alive server in the main process
+    # Start the keep-alive server (in a separate thread if not on Render)
+    import os
     keep_alive()
     
-    # Run the bot in the main thread
-    try:
-        app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
-    except Exception as e:
-        print(f"Bot crashed with error: {e}")
-        raise
-    print("✅ Bot is now running!")
-    app.run_polling()
+    # Start the bot
+    print("Starting bot...")
+    
+    if os.environ.get('RENDER'):
+        # On Render, we need to run both the bot and web server
+        import threading
+        
+        # Start the bot in a separate thread
+        def run_bot():
+            app.run_polling(drop_pending_updates=True)
+        
+        bot_thread = threading.Thread(target=run_bot, daemon=True)
+        bot_thread.start()
+        
+        # Start the web server in the main thread (required for Render)
+        print("Starting web server in main thread...")
+        run_web_server()
+    else:
+        # Local development - just run the bot
+        app.run_polling(drop_pending_updates=True)
