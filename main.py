@@ -496,10 +496,11 @@ async def claim_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 "• Tomorrow at 2 PM\n"
                 "• Friday 3-5 PM\n"
                 "• 2023-12-25 14:30\n\n"
-                "You can be as specific or general as you like!"
+                "You can be as specific or general as you like!\n\n"
+                "Type /cancel to stop"
             )
             return CLAIM_DATE
-            
+                
         except Exception as e:
             print(f"[ERROR] Failed to send date prompt: {e}")
             await update.message.reply_text(
@@ -525,11 +526,21 @@ async def claim_quantity(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 async def claim_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle the pickup date input and send claim request to seller."""
     try:
-        pickup_time = update.message.text
+        # Get and validate the pickup time
+        pickup_time = update.message.text.strip()
+        if not pickup_time:
+            await update.message.reply_text("❌ Please enter a valid pickup time.")
+            return CLAIM_DATE
+            
+        # Get listing and user data
         listing_id = context.user_data.get('claim_listing_id')
         qty = context.user_data.get('claim_qty', 1)
-        listing = get_listing(listing_id)
         
+        if not listing_id:
+            await update.message.reply_text("❌ Error: Missing listing information. Please start over.")
+            return ConversationHandler.END
+            
+        listing = get_listing(listing_id)
         if not listing:
             await update.message.reply_text("❌ This listing is no longer available.")
             return ConversationHandler.END
@@ -537,98 +548,160 @@ async def claim_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         # Store the proposed time in user data
         context.user_data['proposed_time'] = pickup_time
         
-        # Ask if they want to propose a different quantity
-        max_available = listing.get('remaining', 1)
+        # Get the max available quantity
+        try:
+            claims = listing.get('claims', [])
+            if not isinstance(claims, list):
+                claims = []
+            claimed = sum(int(claim.get('qty', 0)) for claim in claims if claim and isinstance(claim, dict))
+            max_available = int(listing.get('qty', 0)) - claimed
+        except (ValueError, TypeError) as e:
+            print(f"[ERROR] Error calculating max available: {e}")
+            max_available = 1
+        
+        # Create confirmation message with keyboard
+        keyboard = [
+            [InlineKeyboardButton("✅ Confirm Claim", callback_data=f"confirm_claim|{listing_id}")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_claim")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Send confirmation message
+        item_name = listing.get('item', 'Item')
         await update.message.reply_text(
-            f"You've requested {qty} units with pickup time: {pickup_time}\n\n"
-            f"Would you like to propose a different quantity? (Current: {qty} units, Max: {max_available})\n"
-            f"Please enter a new quantity or click 'Done' to proceed with {qty} units.",
-            reply_markup=ReplyKeyboardMarkup(
-                [[KeyboardButton('Done')]], 
-                one_time_keyboard=True,
-                resize_keyboard=True
-            )
+            f"📋 <b>Claim Request</b>\n"
+            f"• <b>Item:</b> {html.escape(item_name)}\n"
+            f"• <b>Quantity:</b> {qty}\n"
+            f"• <b>Pickup Time:</b> {html.escape(pickup_time)}\n\n"
+            f"Please confirm your claim request:",
+            parse_mode='HTML',
+            reply_markup=reply_markup
         )
         
         return CLAIM_CONFIRM
         
     except Exception as e:
-        print(f"Error in claim_date: {e}")
-        await update.message.reply_text("❌ An error occurred while processing your request. Please try again.")
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"[ERROR] Error in claim_date: {e}\n{error_details}")
+        
+        try:
+            await update.message.reply_text(
+                "❌ An error occurred while processing your request. Please try again.\n\n"
+                "If the problem persists, please contact support."
+            )
+        except Exception as inner_e:
+            print(f"[ERROR] Failed to send error message: {inner_e}")
+            
+        return ConversationHandler.END
         return ConversationHandler.END
 
 async def confirm_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle quantity confirmation or update."""
+    """Handle the claim confirmation from the inline keyboard."""
     try:
-        user_input = update.message.text
-        listing_id = context.user_data.get('claim_listing_id')
+        query = update.callback_query
+        await query.answer()
+        
+        # Parse the callback data
+        action, listing_id = query.data.split('|')
+        
+        if action != 'confirm_claim':
+            return CLAIM_CONFIRM
+            
+        # Get the user data
         current_qty = context.user_data.get('claim_qty', 1)
-        max_qty = context.user_data.get('max_qty', 1)
         proposed_time = context.user_data.get('proposed_time')
         
-        listing = get_listing(listing_id)
-        if not listing:
-            await update.message.reply_text("❌ This listing is no longer available.")
+        if not listing_id or not proposed_time:
+            await query.edit_message_text("❌ Error: Missing claim information. Please try again.")
             return ConversationHandler.END
         
-        # If user entered a number, update the quantity
-        if user_input.isdigit():
-            new_qty = int(user_input)
-            if 1 <= new_qty <= max_qty:
-                context.user_data['claim_qty'] = new_qty
-                current_qty = new_qty
-                await update.message.reply_text(f"✅ Quantity updated to {new_qty} units.")
-            else:
-                await update.message.reply_text(
-                    f"❌ Please enter a number between 1 and {max_qty} or click 'Done'."
-                )
-                return CLAIM_CONFIRM
+        # Get the listing
+        listing = get_listing(listing_id)
+        if not listing:
+            await query.edit_message_text("❌ This listing is no longer available.")
+            return ConversationHandler.END
+            
+        # Get the maximum available quantity
+        try:
+            claims = listing.get('claims', [])
+            if not isinstance(claims, list):
+                claims = []
+            claimed = sum(int(claim.get('qty', 0)) for claim in claims if claim and isinstance(claim, dict))
+            max_available = int(listing.get('qty', 1)) - claimed
+        except (ValueError, TypeError) as e:
+            print(f"[ERROR] Error calculating max available: {e}")
+            max_available = 1
+            
+        # Validate quantity
+        if current_qty > max_available:
+            await query.edit_message_text(
+                f"❌ The maximum available quantity is now {max_available}. "
+                f"Please start over with a new claim."
+            )
+            return ConversationHandler.END
         
         # Create claim request
         claim_data = {
-            'user_id': update.effective_user.id,
-            'username': update.effective_user.username or update.effective_user.full_name,
+            'user_id': query.from_user.id,
+            'username': query.from_user.username or query.from_user.full_name,
             'qty': current_qty,
             'pickup_time': proposed_time,
             'status': 'pending',
             'timestamp': datetime.datetime.utcnow().isoformat(),
             'proposed_qty': current_qty,  # Store the proposed quantity
-            'original_qty': listing.get('remaining', 1)  # Store the original available quantity
+            'original_qty': listing.get('qty', 1) - claimed  # Store the original available quantity
         }
         
         # Add claim to listing
-        listing_ref = listings_ref.child(listing_id)
-        listing = listing_ref.get()
+        listing_ref = db.reference(f"listings/{listing_id}")
+        listing = listing_ref.get() or {}
         
         if not listing:
-            await update.message.reply_text("❌ Error processing your claim. Please try again.")
+            await query.edit_message_text("❌ Error: Listing not found. Please try again.")
             return ConversationHandler.END
             
         # Initialize claims list if it doesn't exist
         if 'claims' not in listing:
             listing['claims'] = []
+        elif not isinstance(listing['claims'], list):
+            listing['claims'] = []
             
         # Add new claim
         listing['claims'].append(claim_data)
         
+        # Calculate remaining quantity
+        approved_claims = [c for c in listing['claims'] if c.get('status') == 'approved']
+        remaining = int(listing.get('qty', 1)) - sum(int(c.get('qty', 0)) for c in approved_claims)
+        
         # Update listing in database
         listing_ref.update({
             'claims': listing['claims'],
-            'remaining': listing.get('qty', 1) - sum(c.get('qty', 0) for c in listing['claims'] if c.get('status') == 'approved')
+            'remaining': remaining,
+            'status': 'available' if remaining > 0 else 'claimed',
+            'updated_at': datetime.datetime.utcnow().isoformat()
         })
         
         # Notify buyer
-        await update.message.reply_text(
-            "✅ Your claim request has been sent to the seller!\n"
-            "The seller will review your request and get back to you soon."
-        )
+        try:
+            await query.edit_message_text(
+                "✅ Your claim request has been sent to the seller!\n"
+                "The seller will review your request and get back to you soon.",
+                reply_markup=None  # Remove the inline keyboard
+            )
+        except:
+            await context.bot.send_message(
+                chat_id=query.from_user.id,
+                text="✅ Your claim request has been sent to the seller!\n"
+                     "The seller will review your request and get back to you soon."
+            )
         
         # Notify seller
         try:
             keyboard = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("✅ Approve", callback_data=f"approve_claim|{listing_id}|{len(listing['claims']) - 1}"),
-                    InlineKeyboardButton("🔄 Suggest New Time", callback_data=f"suggest_time|{listing_id}|{len(listing['claims']) - 1}")
+                    InlineKeyboardButton("🔄 Suggest Time", callback_data=f"suggest_time|{listing_id}|{len(listing['claims']) - 1}")
                 ],
                 [
                     InlineKeyboardButton("❌ Reject", callback_data=f"reject_claim|{listing_id}|{len(listing['claims']) - 1}")
@@ -638,23 +711,50 @@ async def confirm_claim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             await context.bot.send_message(
                 chat_id=listing['user_id'],
                 text=(
-                    f"📨 New Claim Request!\n\n"
-                    f"Item: {listing['item']}\n"
-                    f"Quantity: {qty}\n"
-                    f"Requested by: @{update.effective_user.username or update.effective_user.full_name}\n"
-                    f"Preferred pickup time: {pickup_time}\n\n"
-                    f"Please choose an action:"
+                    f"📨 <b>New Claim Request!</b>\n\n"
+                    f"🛍️ <b>Item:</b> {html.escape(listing.get('item', 'Unknown Item'))}\n"
+                    f"🔢 <b>Quantity:</b> {current_qty}\n"
+                    f"👤 <b>Requested by:</b> @{query.from_user.username or query.from_user.full_name} (ID: {query.from_user.id})\n"
+                    f"⏰ <b>Preferred pickup time:</b> {html.escape(proposed_time)}\n\n"
+                    f"<i>Please choose an action:</i>"
                 ),
+                parse_mode='HTML',
                 reply_markup=keyboard
             )
         except Exception as e:
-            print(f"Error notifying seller: {e}")
+            print(f"[ERROR] Error notifying seller: {e}")
+            # Try to notify the admin if seller notification fails
+            try:
+                await context.bot.send_message(
+                    chat_id=query.from_user.id,
+                    text="⚠️ Your claim was received, but there was an error notifying the seller. "
+                         "Please contact them directly to ensure they're aware of your request."
+                )
+            except:
+                pass
         
         return ConversationHandler.END
         
     except Exception as e:
-        print(f"Error in claim_date: {e}")
-        await update.message.reply_text("❌ An error occurred. Please try again.")
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"[ERROR] Error in confirm_claim: {e}\n{error_details}")
+        
+        try:
+            await query.edit_message_text(
+                "❌ An error occurred while processing your request. Please try again.\n\n"
+                "If the problem persists, please contact support.",
+                reply_markup=None
+            )
+        except:
+            try:
+                await context.bot.send_message(
+                    chat_id=query.from_user.id,
+                    text="❌ An error occurred while processing your request. Please try again."
+                )
+            except:
+                pass
+                
         return ConversationHandler.END
 
 # ========= CLAIM ACTIONS =========
@@ -1363,18 +1463,41 @@ app.add_handler(CommandHandler("channel", channel))
 
 # Add conversation handlers
 app.add_handler(conv_handler)  # For new item listing
-app.add_handler(claim_conv)    # For claim process
+
+# Define claim conversation handler
+claim_conv = ConversationHandler(
+    entry_points=[
+        CallbackQueryHandler(start_claim, pattern=r'^claim\|')
+    ],
+    states={
+        CLAIM_QTY: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, claim_quantity)
+        ],
+        CLAIM_DATE: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, claim_date)
+        ],
+        CLAIM_CONFIRM: [
+            CallbackQueryHandler(confirm_claim, pattern=r'^confirm_claim\|')
+        ]
+    },
+    fallbacks=[
+        CommandHandler('cancel', cancel_claim),
+        CallbackQueryHandler(cancel_claim, pattern=r'^cancel_claim$')
+    ],
+    per_message=False,
+    per_chat=True,
+    per_user=True
+)
+
+# Add conversation handlers
+app.add_handler(claim_conv)  # For claim process
 app.add_handler(suggest_conv)  # For suggesting pickup times
 
 # Handle claim workflow callbacks
 app.add_handler(CallbackQueryHandler(instructions, pattern="^(help_info|back_to_start)$"))
-app.add_handler(CallbackQueryHandler(handle_claim_action, pattern=r'^(approve_claim|reject_claim)\|'))
+app.add_handler(CallbackQueryHandler(handle_claim_action, pattern=r'^(approve_claim|reject_claim)\\|'))
 app.add_handler(CallbackQueryHandler(suggest_time, pattern=r'^suggest_time\|'))
 app.add_handler(CallbackQueryHandler(cancel_suggest, pattern=r'^cancel_suggest\|'))
-
-# Add all conversation handlers
-app.add_handler(conv_handler)  # Main conversation handler for listing items
-app.add_handler(suggest_conv)  # For suggesting times
 
 # Handle channel posts
 app.add_handler(MessageHandler(filters.ChatType.CHANNEL, channel))
