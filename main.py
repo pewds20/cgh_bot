@@ -17,15 +17,20 @@ from telegram.ext import (
     CallbackQueryHandler, ConversationHandler,
     ContextTypes, filters
 )
-import os, datetime, calendar, json, time
+import os
+import datetime
+import calendar
+import json
+import time
+import html
+import traceback
 from pathlib import Path
 from flask import Flask
 from threading import Thread
-import os
 import firebase_admin
 from firebase_admin import credentials, db
 from firebase_admin.db import Reference
-from typing import Dict, Optional, Any, List, Tuple
+from typing import Dict, Optional, Any, List, Tuple, Union
 
 # ========= FIREBASE SETUP =========
 # Load Firebase credentials from environment variable
@@ -39,9 +44,12 @@ firebase_admin.initialize_app(cred, {
 listings_ref = db.reference("listings")
 user_listings_ref = db.reference("user_listings")
 
-# Conversation states
-(ITEM, QTY, SIZE, EXPIRY, LOCATION, PHOTO, 
- CONFIRM, SUGGEST) = range(8)
+# Conversation states - single source of truth
+(
+    ITEM, QTY, SIZE, EXPIRY, LOCATION, PHOTO,  # 0-5: New item flow
+    CONFIRM, SUGGEST,                           # 6-7: Confirmation and suggestions
+    CLAIM_QTY, CLAIM_DATE, CLAIM_CONFIRM       # 8-10: Claim flow
+) = range(11)
 
 # ========= UTILITY FUNCTIONS =========
 
@@ -1481,11 +1489,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# Claim conversation states
-CLAIM_QTY = 0
-CLAIM_DATE = 1
-CLAIM_CONFIRM = 2
-SUGGEST = 3
+# Remove duplicate state definitions - using the ones at the top of the file
 
 # Claim conversation handler
 claim_conv = ConversationHandler(
@@ -1501,14 +1505,29 @@ claim_conv = ConversationHandler(
         ],
         CLAIM_CONFIRM: [
             CallbackQueryHandler(confirm_claim, pattern=r'^confirm_claim\|')
-        ],
-        SUGGEST: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggest_time_text)
         ]
     },
     fallbacks=[
         CommandHandler('cancel', cancel_claim),
         CallbackQueryHandler(cancel_claim, pattern=r'^cancel_claim$')
+    ],
+    per_message=False,
+    per_chat=True,
+    per_user=True
+)
+
+# Separate handler for suggest time flow
+suggest_conv = ConversationHandler(
+    entry_points=[
+        CallbackQueryHandler(suggest_time, pattern=r'^suggest_time\|')
+    ],
+    states={
+        SUGGEST: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, handle_suggest_time_text)
+        ]
+    },
+    fallbacks=[
+        CallbackQueryHandler(cancel_suggest, pattern=r'^cancel_suggest\|')
     ],
     per_message=False,
     per_chat=True,
@@ -1528,9 +1547,8 @@ app.add_handler(suggest_conv)  # For suggesting pickup times
 
 # Handle claim workflow callbacks
 app.add_handler(CallbackQueryHandler(instructions, pattern="^(help_info|back_to_start)$"))
-app.add_handler(CallbackQueryHandler(handle_claim_action, pattern=r'^(approve_claim|reject_claim)\\|'))
-app.add_handler(CallbackQueryHandler(suggest_time, pattern=r'^suggest_time\|'))
-app.add_handler(CallbackQueryHandler(cancel_suggest, pattern=r'^cancel_suggest\|'))
+app.add_handler(CallbackQueryHandler(handle_claim_action, pattern=r'^(approve_claim|reject_claim)\|'))
+# Note: suggest_time and cancel_suggest are now handled by suggest_conv
 
 # Handle channel posts
 app.add_handler(MessageHandler(filters.ChatType.CHANNEL, channel))
