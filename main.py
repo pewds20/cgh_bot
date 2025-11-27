@@ -1447,13 +1447,22 @@ suggest_conv = ConversationHandler(
 
 # ... (rest of the code remains the same)
 
-# Initialize the application
-app = (
-    Application.builder()
-    .token(BOT_TOKEN)
-    .arbitrary_callback_data(True)  # Allow arbitrary callback data
-    .build()
-)
+# Initialize the application with proper error handling
+print("Initializing bot application...")
+try:
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .arbitrary_callback_data(True)  # Allow arbitrary callback data
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .build()
+    )
+    print("Bot application initialized successfully")
+except Exception as e:
+    print(f"Error initializing bot application: {str(e)}")
+    raise
 
 # Enable logging
 import logging
@@ -1496,41 +1505,15 @@ claim_conv = ConversationHandler(
     per_user=True
 )
 
-# Add all handlers
+# Add command handlers first
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("instructions", instructions))
-app.add_handler(CommandHandler("channel", channel))
+app.add_handler(CommandHandler("help", help_command))
+app.add_handler(CommandHandler("list", list_command))
+app.add_handler(CommandHandler("cancel", cancel))
 
 # Add conversation handlers
 app.add_handler(conv_handler)  # For new item listing
-
-# Define claim conversation handler
-claim_conv = ConversationHandler(
-    entry_points=[
-        CallbackQueryHandler(start_claim, pattern=r'^claim\|')
-    ],
-    states={
-        CLAIM_QTY: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, claim_quantity)
-        ],
-        CLAIM_DATE: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, claim_date)
-        ],
-        CLAIM_CONFIRM: [
-            CallbackQueryHandler(confirm_claim, pattern=r'^confirm_claim\|')
-        ]
-    },
-    fallbacks=[
-        CommandHandler('cancel', cancel_claim),
-        CallbackQueryHandler(cancel_claim, pattern=r'^cancel_claim$')
-    ],
-    per_message=False,
-    per_chat=True,
-    per_user=True
-)
-
-# Add conversation handlers
-app.add_handler(claim_conv)  # For claim process
+app.add_handler(claim_conv)    # For claim process
 app.add_handler(suggest_conv)  # For suggesting pickup times
 
 # Handle claim workflow callbacks
