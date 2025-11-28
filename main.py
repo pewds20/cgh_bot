@@ -24,6 +24,7 @@ import json
 import time
 import html
 import traceback
+import re
 from pathlib import Path
 from flask import Flask
 from threading import Thread
@@ -31,6 +32,11 @@ import firebase_admin
 from firebase_admin import credentials, db
 from firebase_admin.db import Reference
 from typing import Dict, Optional, Any, List, Tuple, Union
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ConversationHandler, ContextTypes, filters
+)
 
 # ========= FIREBASE SETUP =========
 # Load Firebase credentials from environment variable
