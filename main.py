@@ -45,7 +45,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ========= CONFIG =========
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8377427445:AAE-H_EiGAjs4NKE20v9S8zFLOv2AiHKcpU")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8377427445:AAGrnwxTcyQvF2IpEwBTL6AeqR6ux5ulhOY")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@Sustainability_Redistribution")
 FIREBASE_DB_URL = os.getenv("FIREBASE_DB_URL", "https://cgh-telebot-default-rtdb.asia-southeast1.firebasedatabase.app/")
 
