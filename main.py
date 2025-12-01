@@ -1169,10 +1169,10 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• Always verify pickup details with the other party."
     )
     
-    # Create inline keyboard with buttons
+    # Create inline keyboard with simplified buttons
     keyboard = [
         [InlineKeyboardButton("📝 List New Item", callback_data="newitem_btn")],
-        [InlineKeyboardButton("🛍️ View Available Items", callback_data="view_items")]
+        [InlineKeyboardButton("📚 Instructions", callback_data="help_info")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -1628,7 +1628,6 @@ app.add_handler(CommandHandler("instructions", instructions))
 app.add_handler(CommandHandler("list", list_command))
 app.add_handler(CommandHandler("cancel", cancel))
 
-# Add conversation handlers
 app.add_handler(conv_handler)  # For new item listing
 app.add_handler(claim_conv)    # For claim process
 app.add_handler(suggest_conv)  # For suggesting pickup times
@@ -1642,7 +1641,6 @@ app.add_handler(CallbackQueryHandler(instructions, pattern='back_to_start'))
 # Handle claim workflow callbacks
 app.add_handler(CallbackQueryHandler(handle_claim_action, pattern=r'^(approve_claim|reject_claim)\|'))
 # Note: suggest_time and cancel_suggest are now handled by suggest_conv
-
 # Handle channel posts
 app.add_handler(MessageHandler(filters.ChatType.CHANNEL, channel))
 
@@ -1686,21 +1684,19 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle private messages that don't match any command."""
-    # Create inline keyboard with buttons
+    # Create inline keyboard with simplified buttons
     keyboard = [
         [InlineKeyboardButton("📝 List New Item", callback_data="newitem_btn")],
-        [InlineKeyboardButton("📚 Instructions", callback_data="help_info")],
-        [InlineKeyboardButton("🛍️ View Available Items", callback_data="view_items")]
+        [InlineKeyboardButton("📚 Instructions", callback_data="help_info")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
         "🤖 I'm the CGH Sustainability Bot! Here's what I can do:\n\n"
-        "• /start - Show the main menu\n"
-        "• /newitem - List a new item for donation\n"
-        "• /instructions - Learn how to use the bot\n"
+        "• /newitem - List an item for donation\n"
+        "• /instructions - How to use the bot\n"
         "• /list - View available items\n"
-        "• /cancel - Cancel the current action",
+        "• /cancel - Cancel current action",
         reply_markup=reply_markup
     )
 
