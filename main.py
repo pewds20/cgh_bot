@@ -1,10 +1,11 @@
 # ==============================
-# 🏥 Sustainability Redistribution Bot (CLEAN, FIREBASE)
+# 🏥 Sustainability Redistribution Bot (CLEAN, FIREBASE + KEEP-ALIVE)
 # - /newitem to list items
 # - Deep-link "Claim" button → DM with bot
 # - Simple approve / reject flow
 # - Firebase persistence (stateless, survives restart)
 # - Inline keyboards only (no reply keyboard)
+# - Flask keep-alive server for Render Web Service (PORT binding)
 # ==============================
 
 from __future__ import annotations
@@ -16,6 +17,9 @@ import datetime
 import html
 import logging
 from typing import Dict, Any, Optional, List
+import threading
+
+from flask import Flask
 
 from telegram import (
     Update,
@@ -47,7 +51,10 @@ logger = logging.getLogger(__name__)
 # ========= CONFIG =========
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8377427445:AAGrnwxTcyQvF2IpEwBTL6AeqR6ux5ulhOY")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@Sustainability_Redistribution")
-FIREBASE_DB_URL = os.getenv("FIREBASE_DB_URL", "https://cgh-telebot-default-rtdb.asia-southeast1.firebasedatabase.app/")
+FIREBASE_DB_URL = os.getenv(
+    "FIREBASE_DB_URL",
+    "https://cgh-telebot-default-rtdb.asia-southeast1.firebasedatabase.app/",
+)
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
@@ -67,6 +74,29 @@ firebase_admin.initialize_app(cred, {"databaseURL": FIREBASE_DB_URL})
 
 # References
 listings_ref = db.reference("listings")
+
+# ========= FLASK KEEP-ALIVE SERVER (for Render Web Service) =========
+app_flask = Flask("keepalive")
+
+
+@app_flask.route("/")
+def home():
+    return "CGH Sustainability Bot is running!", 200
+
+
+def run_keepalive():
+    """Run a tiny HTTP server on the PORT Render expects."""
+    port = int(os.environ.get("PORT", 10000))
+    logger.info(f"🌐 Keep-alive server starting on port {port}")
+    app_flask.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
+
+def keep_alive():
+    """Start the keep-alive server in a background thread."""
+    t = threading.Thread(target=run_keepalive, daemon=True)
+    t.start()
+    logger.info("✅ Keep-alive server thread started")
+
 
 # ========= CONVERSATION STATES =========
 ITEM, QTY, SIZE, EXPIRY, LOCATION, PHOTO, CONFIRM = range(7)
@@ -239,7 +269,12 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "3. Your item will be posted in the channel\n"
         "4. Others can claim by tapping the <b>‘Claim’</b> button\n"
         "5. You’ll receive a request to approve or reject\n\n"
-        "💡 Quick start: type <b>/newitem</b>."
+        "💡 Quick start: type <b>/newitem</b>.\n\n"
+        "⚠️ <b>Disclaimer</b>\n"
+        "• This bot may occasionally experience technical difficulties.\n"
+        "• If the bot is unresponsive, please post directly in the "
+        "@Sustainability_Redistribution channel.\n"
+        "• If the bot restarts, some older listings may disappear and may need to be reposted."
     )
 
     keyboard = InlineKeyboardMarkup(
@@ -280,7 +315,6 @@ def parse_expiry(text: str) -> str:
 
 async def newitem_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start new item conversation (via /newitem or button)."""
-    # if started from button, use the callback's message
     msg = update.message
     if update.callback_query:
         q = update.callback_query
@@ -385,18 +419,11 @@ async def confirm_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     )
 
-    if update.message:  # came from text or photo
-        if d.get("photo_id") and update.message.photo:
-            # Already sent as photo; just send text preview
-            await update.message.reply_text(
-                caption, parse_mode=ParseMode.HTML, reply_markup=keyboard
-            )
-        else:
-            await update.message.reply_text(
-                caption, parse_mode=ParseMode.HTML, reply_markup=keyboard
-            )
+    if update.message:
+        await update.message.reply_text(
+            caption, parse_mode=ParseMode.HTML, reply_markup=keyboard
+        )
     else:
-        # from callback
         q = update.callback_query
         await q.message.reply_text(
             caption, parse_mode=ParseMode.HTML, reply_markup=keyboard
@@ -585,7 +612,6 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         claims: List[Dict[str, Any]] = listing.get("claims") or []
         claims.append(claim)
-        claim_index = len(claims) - 1
 
         # Save to Firebase
         save_listing(
@@ -816,4 +842,7 @@ def main():
 
 
 if __name__ == "__main__":
+    # Start tiny HTTP server so Render detects an open port
+    keep_alive()
+    # Start Telegram bot polling
     main()
