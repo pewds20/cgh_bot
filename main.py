@@ -956,12 +956,6 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
         item_name = listing.get("item", "Item")
         seller_id = listing.get("user_id")
         seller_name = listing.get("user_name", "Donor")
-        seller_username_stored = listing.get("user_username")
-        seller_username_display = (
-            f"@{seller_username_stored}"
-            if seller_username_stored
-            else seller_name
-        )
 
         # --- Buyer accepts new time ---
         if action == "accept_newtime":
@@ -993,6 +987,17 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
                     "claims": claims,
                 },
             )
+
+            # Resolve seller contact live (username if exists)
+            try:
+                seller_chat = await context.bot.get_chat(seller_id)
+                if seller_chat.username:
+                    seller_username_display = f"@{seller_chat.username}"
+                else:
+                    seller_username_display = f"{seller_chat.full_name} (ID: {seller_id})"
+            except Exception as e:
+                logger.error(f"Error fetching seller chat (rescheduled): {e}")
+                seller_username_display = f"{seller_name} (ID: {seller_id})"
 
             # Update channel post
             await update_channel_post(context, listing_id)
