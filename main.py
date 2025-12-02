@@ -1,8 +1,9 @@
 # ==============================
-# 🏥 Sustainability Redistribution Bot (CLEAN, FIREBASE + KEEP-ALIVE)
+# 🏥 Sustainability Redistribution Bot
 # - /newitem to list items
 # - Deep-link "Claim" button → DM with bot
-# - Simple approve / reject flow
+# - Approve / Reject / Suggest new time flow
+# - Flexible quantity input ("10 bottles") with numeric tracking
 # - Firebase persistence (stateless, survives restart)
 # - Inline keyboards only (no reply keyboard)
 # - Flask keep-alive server for Render Web Service (PORT binding)
@@ -16,8 +17,9 @@ import time
 import datetime
 import html
 import logging
-from typing import Dict, Any, Optional, List
 import threading
+import re
+from typing import Dict, Any, Optional, List
 
 from flask import Flask
 
@@ -49,7 +51,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ========= CONFIG =========
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8377427445:AAGrnwxTcyQvF2IpEwBTL6AeqR6ux5ulhOY")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8377427445:AAGEb3M0hCRF18Wyl5W1w2-y88Tgr8IQKUE")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@Sustainability_Redistribution")
 FIREBASE_DB_URL = os.getenv(
     "FIREBASE_DB_URL",
@@ -108,11 +110,16 @@ def create_listing(data: Dict[str, Any]) -> Optional[str]:
     """Create a new listing in Firebase and return its ID."""
     try:
         now_ts = int(time.time())
+        qty_numeric = int(data.get("qty", 0) or 0)
+        qty_display = data.get("qty_display") or str(qty_numeric)
+
         data = {
             **data,
+            "qty": qty_numeric,          # numeric quantity for tracking
+            "qty_display": qty_display,  # original text like "10 bottles"
             "created_at": now_ts,
             "status": "available",
-            "remaining": int(data.get("qty", 0) or 0),
+            "remaining": qty_numeric,
             "claims": [],  # list of {user_id, username, qty, pickup_time, status}
         }
         new_ref = listings_ref.push(data)
@@ -156,6 +163,7 @@ async def update_channel_post(
 
     total_qty = int(listing.get("qty", 0) or 0)
     remaining = int(listing.get("remaining", 0) or 0)
+    qty_display = listing.get("qty_display") or str(total_qty)
 
     item = html.escape(str(listing.get("item", "Item")))
     size = html.escape(str(listing.get("size", "N/A")))
@@ -164,7 +172,8 @@ async def update_channel_post(
 
     text = (
         f"🧾 <b>{item}</b>\n"
-        f"📦 Quantity: {total_qty} (Remaining: {remaining})\n"
+        f"📦 Quantity: {html.escape(str(qty_display))} "
+        f"(Remaining: {remaining})\n"
         f"📏 Size: {size}\n"
         f"⏰ Expiry: {expiry}\n"
         f"📍 {location}"
@@ -206,7 +215,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start and deep-link claim flow."""
     args = context.args or []
 
-    # --- Deep link: start claim flow (from Claim button) ---
+    # --- Deep link: start claim flow ---
     if args and args[0].startswith("claim_"):
         listing_id = args[0].split("_", 1)[1]
         listing = get_listing(listing_id)
@@ -235,7 +244,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # --- Normal /start menu (typed by user) ---
+    # --- Normal /start menu ---
     keyboard = InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("📝 List New Item", callback_data="newitem_btn")],
@@ -249,12 +258,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>Commands</b>\n"
         "• /newitem – List an item for donation\n"
         "• /instructions – How it works\n"
-        "• /cancel – Cancel your current action\n\n"
-        "📦 <b>To claim an item:</b>\n"
-        "Please go to the @Sustainability_Redistribution channel and tap the "
-        "<b>‘Claim’</b> button under the specific item. You do <u>not</u> need to type /start "
-        "to claim.\n\n"
-        "Use /start mainly if you want to see this menu or list an item."
+        "• /cancel – Cancel the current action\n\n"
+        "Or use the buttons below."
     )
 
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML, reply_markup=keyboard)
@@ -266,16 +271,15 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "1. Type <b>/newitem</b> to start the listing process\n"
         "2. You’ll be asked for:\n"
         "   • Item name\n"
-        "   • Quantity\n"
+        "   • Quantity (e.g. '10 boxes', '5 bottles')\n"
         "   • Size/Volume (or 'na')\n"
         "   • Expiry date (DD/MM/YYYY or 'na')\n"
         "   • Pickup location\n"
         "   • Optional photo\n\n"
         "3. Your item will be posted in the channel\n"
         "4. Others can claim by tapping the <b>‘Claim’</b> button\n"
-        "5. You’ll receive a request to approve or reject\n\n"
-        "💡 Quick start: type <b>/newitem</b>.\n"
-        "❌ At any point, you can type <b>/cancel</b> to stop the current action.\n\n"
+        "5. You’ll receive a request to approve, reject, or suggest a new time\n\n"
+        "💡 Quick start: type <b>/newitem</b>.\n\n"
         "⚠️ <b>Disclaimer</b>\n"
         "• This bot may occasionally experience technical difficulties.\n"
         "• If the bot is unresponsive, please post directly in the "
@@ -301,6 +305,14 @@ async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allow user to cancel any current flow."""
+    context.user_data.clear()
+    await update.message.reply_text(
+        "❌ Current action cancelled. You can start again with /newitem.",
+    )
+
+
 # ========= NEW ITEM FLOW =========
 def parse_expiry(text: str) -> str:
     t = text.strip()
@@ -317,6 +329,20 @@ def parse_expiry(text: str) -> str:
             continue
 
     raise ValueError("Invalid date. Use DD/MM/YYYY or 'na'.")
+
+
+def extract_quantity(qtext: str) -> int:
+    """
+    Extract the first integer from a quantity string.
+    E.g. "10 bottles" -> 10
+    """
+    m = re.search(r"\d+", qtext)
+    if not m:
+        raise ValueError("No number found in quantity.")
+    qty = int(m.group())
+    if qty <= 0:
+        raise ValueError("Quantity must be positive.")
+    return qty
 
 
 async def newitem_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -338,22 +364,27 @@ async def newitem_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ask_qty(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["item"] = update.message.text.strip()
     await update.message.reply_text(
-        "📦 How many boxes or units are available?\nExample: 5"
+        "📦 How many boxes or units are available?\n"
+        "You can type e.g. '10', '10 boxes', '10 bottles'."
     )
     return QTY
 
 
 async def ask_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip()
+
     try:
-        qty = int(txt)
-        if qty <= 0:
-            raise ValueError
+        qty_numeric = extract_quantity(txt)
     except ValueError:
-        await update.message.reply_text("❌ Please enter a positive whole number.")
+        await update.message.reply_text(
+            "❌ Please include a positive number in your answer.\n"
+            "Examples: '10', '10 boxes', '5 bottles'."
+        )
         return QTY
 
-    context.user_data["qty"] = qty
+    context.user_data["qty"] = qty_numeric
+    context.user_data["qty_display"] = txt  # keep original text for display
+
     await update.message.reply_text(
         "📏 What is the size/volume?\n"
         "Type 'na' if not applicable."
@@ -409,7 +440,7 @@ async def confirm_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption = (
         "📝 <b>Confirm Your Listing</b>\n\n"
         f"🧾 <b>Item:</b> {html.escape(str(d.get('item')))}\n"
-        f"📦 <b>Quantity:</b> {d.get('qty')}\n"
+        f"📦 <b>Quantity:</b> {html.escape(str(d.get('qty_display', d.get('qty')))} )\n"
         f"📏 <b>Size:</b> {html.escape(str(d.get('size')))}\n"
         f"⏰ <b>Expiry:</b> {html.escape(str(d.get('expiry')))}\n"
         f"📍 <b>Location:</b> {html.escape(str(d.get('location')))}\n"
@@ -439,18 +470,13 @@ async def confirm_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generic cancel handler for both conversation and /cancel."""
     if update.callback_query:
         q = update.callback_query
         await q.answer()
-        await q.edit_message_text(
-            "❌ Action cancelled.\n\n"
-            "You can start again with /newitem or tap a Claim button in the channel."
-        )
+        await q.edit_message_text("❌ Listing cancelled. Start again with /newitem.")
     else:
         await update.message.reply_text(
-            "❌ Action cancelled.\n\n"
-            "You can start again with /newitem or tap a Claim button in the channel."
+            "❌ Listing cancelled. Start again with /newitem."
         )
     context.user_data.clear()
     return ConversationHandler.END
@@ -469,6 +495,7 @@ async def do_post_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "user_name": user.full_name,
         "item": d.get("item"),
         "qty": int(d.get("qty")),
+        "qty_display": d.get("qty_display", str(d.get("qty"))),
         "size": d.get("size"),
         "expiry": d.get("expiry"),
         "location": d.get("location"),
@@ -484,7 +511,7 @@ async def do_post_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = (
         f"🆕 <b>New Item Available</b>\n\n"
         f"🧾 <b>Item:</b> {html.escape(str(listing_data['item']))}\n"
-        f"📦 <b>Quantity:</b> {listing_data['qty']}\n"
+        f"📦 <b>Quantity:</b> {html.escape(str(listing_data['qty_display']))}\n"
         f"📏 <b>Size:</b> {html.escape(str(listing_data['size']))}\n"
         f"⏰ <b>Expiry:</b> {html.escape(str(listing_data['expiry']))}\n"
         f"📍 <b>Location:</b> {html.escape(str(listing_data['location']))}\n\n"
@@ -517,7 +544,7 @@ async def do_post_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE)
         save_listing(
             listing_id,
             {
-                "channel_message_id": msg.message_id,
+                "channel_message_id": msg.message_id
             },
         )
 
@@ -537,11 +564,84 @@ async def do_post_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 # ========= CLAIM FLOW =========
 async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle DM text – mainly claim qty & time."""
+    """Handle DM text – claim qty & time, and seller reschedule flow."""
     if update.effective_chat.type != ChatType.PRIVATE:
         return
 
-    # If user is in a claim flow
+    text = update.message.text.strip()
+
+    # --- Seller reschedule flow (suggest new time) ---
+    if context.user_data.get("resched_mode"):
+        listing_id = context.user_data.get("resched_listing_id")
+        buyer_id = context.user_data.get("resched_user_id")
+        qty = context.user_data.get("resched_qty")
+        old_time = context.user_data.get("resched_old_time")
+
+        listing = get_listing(listing_id) if listing_id else None
+        if not listing:
+            await update.message.reply_text(
+                "❌ This listing no longer exists. Reschedule cancelled."
+            )
+            context.user_data.clear()
+            return
+
+        seller = update.effective_user
+        item_name = listing.get("item", "Item")
+        new_time = text
+
+        # Send proposal to buyer
+        buyer_username = f"@{listing.get('buyer_username', '')}"  # may not exist; fallback later
+        seller_username = (
+            f"@{seller.username}" if seller.username else seller.full_name
+        )
+
+        kb = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "✅ Confirm new time",
+                        callback_data=f"accept_newtime|{listing_id}|{qty}|{new_time}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "❌ Decline new time",
+                        callback_data=f"decline_newtime|{listing_id}|{qty}|{new_time}",
+                    )
+                ],
+            ]
+        )
+
+        try:
+            await context.bot.send_message(
+                chat_id=buyer_id,
+                text=(
+                    "📅 <b>New Pickup Time Suggested</b>\n\n"
+                    f"🧾 <b>Item:</b> {html.escape(str(item_name))}\n"
+                    f"🔢 <b>Quantity:</b> {qty}\n"
+                    f"⏰ <b>Original time:</b> {html.escape(str(old_time))}\n"
+                    f"⏰ <b>Proposed new time:</b> {html.escape(str(new_time))}\n\n"
+                    f"👤 <b>From:</b> {html.escape(seller_username)}\n\n"
+                    "Do you accept this new time?"
+                ),
+                parse_mode=ParseMode.HTML,
+                reply_markup=kb,
+            )
+        except Exception as e:
+            logger.error(f"Error sending reschedule proposal to buyer: {e}")
+            await update.message.reply_text(
+                "❌ Could not send the proposed time to the requester."
+            )
+            context.user_data.clear()
+            return
+
+        await update.message.reply_text(
+            "✅ Your proposed pickup time has been sent to the requester for confirmation."
+        )
+        context.user_data.clear()
+        return
+
+    # --- Claim flow (buyer) ---
     step = context.user_data.get("claim_step")
     if not step:
         # Generic help
@@ -552,25 +652,19 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         )
         await update.message.reply_text(
-            "Hi! To claim an item, please tap the <b>‘Claim’</b> button under the listing in the channel.\n\n"
-            "To list a new item, use /newitem.\n"
-            "You can type /cancel anytime to stop the current action.",
-            parse_mode=ParseMode.HTML,
+            "Hi! Use /newitem to list items, or tap a Claim button in the channel to request an item.",
             reply_markup=keyboard,
         )
         return
 
-    text = update.message.text.strip()
-
     # --- Step 1: quantity ---
     if step == "qty":
         try:
-            qty = int(text)
-            if qty <= 0:
-                raise ValueError
+            qty = extract_quantity(text)
         except ValueError:
             await update.message.reply_text(
-                "❌ Please enter a positive whole number for the quantity."
+                "❌ Please include a positive number for the quantity.\n"
+                "Example: '2', '2 boxes', '3 bottles'."
             )
             return
 
@@ -638,6 +732,11 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # Notify seller
+        buyer_username = (
+            f"@{buyer.username}" if buyer.username else buyer.full_name
+        )
+        item_name = listing.get("item", "Item")
+
         kb = InlineKeyboardMarkup(
             [
                 [
@@ -649,11 +748,16 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "❌ Reject",
                         callback_data=f"reject|{listing_id}|{buyer.id}|{qty}|{pickup_time}",
                     ),
-                ]
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🕒 Suggest new time",
+                        callback_data=f"suggest|{listing_id}|{buyer.id}|{qty}|{pickup_time}",
+                    )
+                ],
             ]
         )
 
-        item_name = listing.get("item", "Item")
         try:
             await context.bot.send_message(
                 chat_id=seller_id,
@@ -661,9 +765,9 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "📨 <b>New Claim Request</b>\n\n"
                     f"🧾 <b>Item:</b> {html.escape(str(item_name))}\n"
                     f"🔢 <b>Quantity:</b> {qty}\n"
-                    f"👤 <b>From:</b> @{buyer.username or buyer.full_name}\n"
-                    f"⏰ <b>Pickup:</b> {html.escape(pickup_time)}\n\n"
-                    "Please approve or reject:"
+                    f"👤 <b>From:</b> {html.escape(buyer_username)}\n"
+                    f"⏰ <b>Requested pickup:</b> {html.escape(pickup_time)}\n\n"
+                    "Please approve, reject, or suggest a new time:"
                 ),
                 parse_mode=ParseMode.HTML,
                 reply_markup=kb,
@@ -673,114 +777,267 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await update.message.reply_text(
             "✅ Your request has been sent to the donor. "
-            "You’ll be notified once they approve or reject."
+            "You’ll be notified once they approve, reject, or propose a new time."
         )
         context.user_data.clear()
         return
 
 
 async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Seller approves or rejects a claim."""
+    """Seller approves/rejects/suggests, and buyer accepts/declines new time."""
     q = update.callback_query
     await q.answer()
 
-    try:
-        action, listing_id, user_id_str, qty_str, pickup_time = q.data.split("|", 4)
+    data = q.data
+    parts = data.split("|")
+    action = parts[0]
+
+    # Common: get listing
+    if action in ("approve", "reject", "suggest"):
+        if len(parts) != 5:
+            await q.edit_message_text("❌ Invalid action.")
+            return
+        _, listing_id, user_id_str, qty_str, pickup_time = parts
         user_id = int(user_id_str)
         qty = int(qty_str)
-    except Exception:
-        await q.edit_message_text("❌ Invalid action.")
-        return
 
-    listing = get_listing(listing_id)
-    if not listing:
-        await q.edit_message_text("❌ Listing no longer exists.")
-        return
+        listing = get_listing(listing_id)
+        if not listing:
+            await q.edit_message_text("❌ Listing no longer exists.")
+            return
 
-    remaining = int(listing.get("remaining", 0) or 0)
-    item_name = listing.get("item", "Item")
+        remaining = int(listing.get("remaining", 0) or 0)
+        item_name = listing.get("item", "Item")
+        seller = update.effective_user
+        seller_username = (
+            f"@{seller.username}" if seller.username else seller.full_name
+        )
 
-    if action == "approve":
-        if remaining < qty:
+        # --- Approve ---
+        if action == "approve":
+            if remaining < qty:
+                await q.edit_message_text(
+                    "⚠️ Not enough remaining stock to approve this claim."
+                )
+                return
+
+            remaining -= qty
+            status = "available" if remaining > 0 else "claimed"
+
+            claims: List[Dict[str, Any]] = listing.get("claims") or []
+            claims.append(
+                {
+                    "user_id": user_id,
+                    "qty": qty,
+                    "pickup_time": pickup_time,
+                    "status": "approved",
+                    "timestamp": datetime.datetime.utcnow().isoformat(),
+                }
+            )
+
+            save_listing(
+                listing_id,
+                {
+                    "remaining": remaining,
+                    "status": status,
+                    "claims": claims,
+                },
+            )
+
+            # Update channel post
+            await update_channel_post(context, listing_id)
+
+            # Notify buyer
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"✅ Your claim for <b>{html.escape(str(item_name))}</b> "
+                        f"({qty} units) has been <b>approved</b>!\n\n"
+                        f"⏰ Pickup: {html.escape(pickup_time)}\n"
+                        f"📍 Location: {html.escape(str(listing.get('location', 'N/A')))}\n\n"
+                        f"👥 You can contact the donor at: {html.escape(seller_username)}"
+                    ),
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception as e:
+                logger.error(f"Error notifying buyer: {e}")
+
             await q.edit_message_text(
-                "⚠️ Not enough remaining stock to approve this claim."
+                f"✅ Approved {qty} × {item_name} for user ID {user_id}."
             )
             return
 
-        remaining -= qty
-        status = "available" if remaining > 0 else "claimed"
+        # --- Reject ---
+        if action == "reject":
+            claims: List[Dict[str, Any]] = listing.get("claims") or []
+            claims.append(
+                {
+                    "user_id": user_id,
+                    "qty": qty,
+                    "pickup_time": pickup_time,
+                    "status": "rejected",
+                    "timestamp": datetime.datetime.utcnow().isoformat(),
+                }
+            )
+            save_listing(listing_id, {"claims": claims})
 
-        # Append an approved claim entry
-        claims: List[Dict[str, Any]] = listing.get("claims") or []
-        claims.append(
-            {
-                "user_id": user_id,
-                "qty": qty,
-                "pickup_time": pickup_time,
-                "status": "approved",
-                "timestamp": datetime.datetime.utcnow().isoformat(),
-            }
-        )
+            # Notify buyer
+            try:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"❌ Your claim for <b>{html.escape(str(item_name))}</b> "
+                        f"({qty} units) was rejected by the donor.\n\n"
+                        f"👥 You may contact the donor at: {html.escape(seller_username)} "
+                        "if you’d like to discuss alternatives."
+                    ),
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception as e:
+                logger.error(f"Error notifying buyer: {e}")
 
-        save_listing(
-            listing_id,
-            {
-                "remaining": remaining,
-                "status": status,
-                "claims": claims,
-            },
-        )
+            await q.edit_message_text("❌ Claim rejected.")
+            return
 
-        # Update channel post
-        await update_channel_post(context, listing_id)
+        # --- Suggest new time ---
+        if action == "suggest":
+            # Put seller into reschedule mode
+            context.user_data["resched_mode"] = True
+            context.user_data["resched_listing_id"] = listing_id
+            context.user_data["resched_user_id"] = user_id
+            context.user_data["resched_qty"] = qty
+            context.user_data["resched_old_time"] = pickup_time
 
-        # Notify buyer
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=(
-                    f"✅ Your claim for <b>{html.escape(str(item_name))}</b> "
-                    f"({qty} units) has been <b>approved</b>!\n\n"
-                    f"⏰ Pickup: {html.escape(pickup_time)}\n"
-                    f"📍 Location: {html.escape(str(listing.get('location', 'N/A')))}"
-                ),
+            await q.edit_message_text(
+                "🕒 Please type your <b>proposed new pickup time</b> in this chat.\n\n"
+                "Example: 'Next Mon, 3–4 pm' or 'Tomorrow 10 am'.",
                 parse_mode=ParseMode.HTML,
             )
-        except Exception as e:
-            logger.error(f"Error notifying buyer: {e}")
+            return
 
-        await q.edit_message_text(
-            f"✅ Approved {qty} × {item_name} for user ID {user_id}."
+    # Buyer response to suggested time
+    elif action in ("accept_newtime", "decline_newtime"):
+        if len(parts) < 4:
+            await q.edit_message_text("❌ Invalid action.")
+            return
+        _, listing_id, qty_str, new_time = parts
+        qty = int(qty_str)
+        buyer = q.from_user
+        buyer_id = buyer.id
+        buyer_username = (
+            f"@{buyer.username}" if buyer.username else buyer.full_name
         )
 
-    elif action == "reject":
-        # Append a rejected claim entry (optional)
-        claims: List[Dict[str, Any]] = listing.get("claims") or []
-        claims.append(
-            {
-                "user_id": user_id,
-                "qty": qty,
-                "pickup_time": pickup_time,
-                "status": "rejected",
-                "timestamp": datetime.datetime.utcnow().isoformat(),
-            }
-        )
-        save_listing(listing_id, {"claims": claims})
+        listing = get_listing(listing_id)
+        if not listing:
+            await q.edit_message_text("❌ Listing no longer exists.")
+            return
 
-        # Notify buyer
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=(
-                    f"❌ Your claim for <b>{html.escape(str(item_name))}</b> "
-                    f"({qty} units) was rejected by the donor."
-                ),
-                parse_mode=ParseMode.HTML,
+        remaining = int(listing.get("remaining", 0) or 0)
+        item_name = listing.get("item", "Item")
+        seller_id = listing.get("user_id")
+        seller_name = listing.get("user_name", "Donor")
+        # seller username not stored; buyer can reply in the DM thread
+        seller_username_display = seller_name
+
+        # --- Buyer accepts new time ---
+        if action == "accept_newtime":
+            if remaining < qty:
+                await q.edit_message_text(
+                    "⚠️ Not enough remaining stock to approve this claim."
+                )
+                return
+
+            remaining -= qty
+            status = "available" if remaining > 0 else "claimed"
+
+            claims: List[Dict[str, Any]] = listing.get("claims") or []
+            claims.append(
+                {
+                    "user_id": buyer_id,
+                    "qty": qty,
+                    "pickup_time": new_time,
+                    "status": "approved_rescheduled",
+                    "timestamp": datetime.datetime.utcnow().isoformat(),
+                }
             )
-        except Exception as e:
-            logger.error(f"Error notifying buyer: {e}")
 
-        await q.edit_message_text("❌ Claim rejected.")
+            save_listing(
+                listing_id,
+                {
+                    "remaining": remaining,
+                    "status": status,
+                    "claims": claims,
+                },
+            )
+
+            # Update channel post
+            await update_channel_post(context, listing_id)
+
+            # Notify buyer (confirmed)
+            try:
+                await context.bot.send_message(
+                    chat_id=buyer_id,
+                    text=(
+                        f"✅ Your claim for <b>{html.escape(str(item_name))}</b> "
+                        f"({qty} units) is <b>confirmed</b> with the new time.\n\n"
+                        f"⏰ Pickup: {html.escape(new_time)}\n"
+                        f"📍 Location: {html.escape(str(listing.get('location', 'N/A')))}\n\n"
+                        f"👥 You can contact the donor at: {html.escape(seller_username_display)}"
+                    ),
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception as e:
+                logger.error(f"Error notifying buyer (rescheduled): {e}")
+
+            # Notify seller
+            try:
+                await context.bot.send_message(
+                    chat_id=seller_id,
+                    text=(
+                        "✅ <b>Rescheduled Pickup Confirmed</b>\n\n"
+                        f"🧾 <b>Item:</b> {html.escape(str(item_name))}\n"
+                        f"🔢 <b>Quantity:</b> {qty}\n"
+                        f"⏰ <b>Pickup:</b> {html.escape(new_time)}\n\n"
+                        f"👥 Requester: {html.escape(buyer_username)}"
+                    ),
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception as e:
+                logger.error(f"Error notifying seller (rescheduled): {e}")
+
+            await q.edit_message_text(
+                "✅ New pickup time confirmed. The claim has been approved."
+            )
+            return
+
+        # --- Buyer declines new time ---
+        if action == "decline_newtime":
+            # Just notify seller so they can discuss directly
+            try:
+                await context.bot.send_message(
+                    chat_id=seller_id,
+                    text=(
+                        "⚠️ <b>Reschedule Declined</b>\n\n"
+                        f"The requester for <b>{html.escape(str(item_name))}</b> "
+                        f"({qty} units) declined the proposed new time.\n\n"
+                        f"👥 Requester: {html.escape(buyer_username)}\n\n"
+                        "You may message them directly to arrange another time."
+                    ),
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception as e:
+                logger.error(f"Error notifying seller (declined new time): {e}")
+
+            await q.edit_message_text(
+                "❌ You declined the proposed time. "
+                "You may coordinate directly with the donor via Telegram messages."
+            )
+            return
+
+    else:
+        await q.edit_message_text("❌ Unknown action.")
 
 
 # ========= ERROR HANDLER =========
@@ -836,19 +1093,23 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("instructions", instructions))
-    app.add_handler(CommandHandler("cancel", cancel_post))
+    app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(conv_handler)
 
-    # DM text handler (claim flow & generic help)
+    # DM text handler (claim flow & seller reschedule flow & generic help)
     app.add_handler(
         MessageHandler(
-            filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, private_message
+            filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
+            private_message,
         )
     )
 
-    # Claim decision buttons
+    # Claim-related buttons: approve / reject / suggest / accept_newtime / decline_newtime
     app.add_handler(
-        CallbackQueryHandler(handle_claim_decision, pattern="^(approve|reject)\|")
+        CallbackQueryHandler(
+            handle_claim_decision,
+            pattern="^(approve|reject|suggest|accept_newtime|decline_newtime)\|",
+        )
     )
 
     # Inline buttons for help/newitem
@@ -858,7 +1119,7 @@ def main():
     app.add_error_handler(error_handler)
     app.post_init = set_commands
 
-    logger.info("🤖 Bot starting with Firebase persistence (clean version)...")
+    logger.info("🤖 Bot starting with Firebase persistence + keep-alive...")
     app.run_polling(drop_pending_updates=True)
 
 
