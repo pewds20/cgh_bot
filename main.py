@@ -7,6 +7,7 @@
 # - Firebase persistence (stateless, survives restart)
 # - Inline keyboards only (no reply keyboard)
 # - Flask keep-alive server for Render Web Service (PORT binding)
+# - /admin for bumping unclaimed listings
 # ==============================
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import html
 import logging
 import threading
 import re
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Set
 
 from flask import Flask
 
@@ -63,6 +64,16 @@ if not BOT_TOKEN:
 
 if not FIREBASE_DB_URL:
     raise RuntimeError("FIREBASE_DB_URL is not set")
+
+# Admin users (Telegram user IDs), comma-separated, e.g. "12345,67890"
+ADMIN_IDS_RAW = os.getenv("ADMIN_USER_IDS", "")
+ADMIN_USER_IDS: Set[int] = {
+    int(x.strip()) for x in ADMIN_IDS_RAW.split(",") if x.strip().isdigit()
+}
+if not ADMIN_USER_IDS:
+    logger.warning(
+        "⚠️ No ADMIN_USER_IDS configured. /admin and admin callbacks will be inaccessible."
+    )
 
 # ========= FIREBASE INIT =========
 firebase_creds_raw = os.getenv("FIREBASE_CREDENTIALS")
@@ -115,12 +126,12 @@ def create_listing(data: Dict[str, Any]) -> Optional[str]:
 
         data = {
             **data,
-            "qty": qty_numeric,          # numeric quantity for tracking
+            "qty": qty_numeric,  # numeric quantity for tracking
             "qty_display": qty_display,  # original text like "10 bottles"
             "created_at": now_ts,
             "status": "available",
             "remaining": qty_numeric,
-            "claims": [],  # list of {user_id, username, display_name, qty, pickup_time, status}
+            "claims": [],  # list of {user_id, username, qty, pickup_time, status}
         }
         new_ref = listings_ref.push(data)
         return new_ref.key
@@ -220,15 +231,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         listing_id = args[0].split("_", 1)[1]
         listing = get_listing(listing_id)
 
+        msg_obj = update.message or update.effective_message
+
         if not listing:
-            await update.message.reply_text("❌ This listing is no longer available.")
+            await msg_obj.reply_text("❌ This listing is no longer available.")
             return
 
         remaining = int(listing.get("remaining", 0) or 0)
         status = listing.get("status", "unknown")
 
         if remaining <= 0 or status != "available":
-            await update.message.reply_text("❌ This listing has been fully claimed.")
+            await msg_obj.reply_text("❌ This listing has been fully claimed.")
             return
 
         context.user_data.clear()
@@ -236,7 +249,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["claim_step"] = "qty"
         context.user_data["max_qty"] = remaining
 
-        await update.message.reply_text(
+        await msg_obj.reply_text(
             f"You’re claiming <b>{html.escape(listing.get('item', 'Item'))}</b>.\n\n"
             f"📦 Available: {remaining}\n"
             "How many units would you like to claim?",
@@ -262,7 +275,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Or use the buttons below."
     )
 
-    await update.message.reply_text(msg, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+    if update.message:
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML, reply_markup=keyboard)
+    else:
+        # e.g. started from a button without a message
+        await update.effective_chat.send_message(
+            msg, parse_mode=ParseMode.HTML, reply_markup=keyboard
+        )
 
 
 async def instructions(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -493,7 +512,7 @@ async def do_post_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE)
     listing_data = {
         "user_id": user.id,
         "user_name": user.full_name,
-        "user_username": user.username if user.username else None,
+        "user_username": user.username,  # may be None
         "item": d.get("item"),
         "qty": int(d.get("qty")),
         "qty_display": d.get("qty_display", str(d.get("qty"))),
@@ -594,6 +613,7 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"@{seller.username}" if seller.username else seller.full_name
         )
 
+        # Send proposal to buyer
         kb = InlineKeyboardMarkup(
             [
                 [
@@ -712,8 +732,7 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Build claim object (pending)
         claim = {
             "user_id": buyer.id,
-            "username": buyer.username if buyer.username else None,
-            "display_name": buyer.full_name,
+            "username": buyer.username or buyer.full_name,
             "qty": qty,
             "pickup_time": pickup_time,
             "status": "pending",
@@ -732,7 +751,7 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # Notify seller
-        buyer_username_for_seller = (
+        buyer_username = (
             f"@{buyer.username}" if buyer.username else buyer.full_name
         )
         item_name = listing.get("item", "Item")
@@ -765,7 +784,7 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "📨 <b>New Claim Request</b>\n\n"
                     f"🧾 <b>Item:</b> {html.escape(str(item_name))}\n"
                     f"🔢 <b>Quantity:</b> {qty}\n"
-                    f"👤 <b>From:</b> {html.escape(buyer_username_for_seller)}\n"
+                    f"👤 <b>From:</b> {html.escape(buyer_username)}\n"
                     f"⏰ <b>Requested pickup:</b> {html.escape(pickup_time)}\n\n"
                     "Please approve, reject, or suggest a new time:"
                 ),
@@ -844,17 +863,6 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
                 },
             )
 
-            # Try to resolve buyer contact as @username (preferred) or full name + ID
-            try:
-                chat = await context.bot.get_chat(user_id)
-                if chat.username:
-                    buyer_contact = f"@{chat.username}"
-                else:
-                    buyer_contact = f"{chat.full_name} (ID: {user_id})"
-            except Exception as e:
-                logger.error(f"Error fetching buyer chat for contact: {e}")
-                buyer_contact = f"ID: {user_id}"
-
             # Update channel post
             await update_channel_post(context, listing_id)
 
@@ -867,7 +875,7 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
                         f"({qty} units) has been <b>approved</b>!\n\n"
                         f"⏰ Pickup: {html.escape(pickup_time)}\n"
                         f"📍 Location: {html.escape(str(listing.get('location', 'N/A')))}\n\n"
-                        f"👥 You can contact the donor at: {html.escape(seller_username)}\n\n"
+                        f"👥 You can contact the donor at: {html.escape(seller_username)}\n"
                         "💬 On the day of the meetup, please drop them a message on Telegram "
                         "to coordinate exact timing and location."
                     ),
@@ -876,13 +884,8 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
             except Exception as e:
                 logger.error(f"Error notifying buyer: {e}")
 
-            # Notify seller (confirmation with buyer contact)
             await q.edit_message_text(
-                (
-                    f"✅ Approved {qty} × {item_name} for {buyer_contact}.\n\n"
-                    "💬 On the day of the meetup, please drop them a message on Telegram "
-                    "to coordinate exact timing and location."
-                )
+                f"✅ Approved {qty} × {item_name} for user ID {user_id}."
             )
             return
 
@@ -955,7 +958,12 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
         remaining = int(listing.get("remaining", 0) or 0)
         item_name = listing.get("item", "Item")
         seller_id = listing.get("user_id")
-        seller_name = listing.get("user_name", "Donor")
+        # Prefer stored username; fallback to full name
+        seller_username_display = (
+            f"@{listing.get('user_username')}"
+            if listing.get("user_username")
+            else listing.get("user_name", "Donor")
+        )
 
         # --- Buyer accepts new time ---
         if action == "accept_newtime":
@@ -988,17 +996,6 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
                 },
             )
 
-            # Resolve seller contact live (username if exists)
-            try:
-                seller_chat = await context.bot.get_chat(seller_id)
-                if seller_chat.username:
-                    seller_username_display = f"@{seller_chat.username}"
-                else:
-                    seller_username_display = f"{seller_chat.full_name} (ID: {seller_id})"
-            except Exception as e:
-                logger.error(f"Error fetching seller chat (rescheduled): {e}")
-                seller_username_display = f"{seller_name} (ID: {seller_id})"
-
             # Update channel post
             await update_channel_post(context, listing_id)
 
@@ -1011,7 +1008,7 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
                         f"({qty} units) is <b>confirmed</b> with the new time.\n\n"
                         f"⏰ Pickup: {html.escape(new_time)}\n"
                         f"📍 Location: {html.escape(str(listing.get('location', 'N/A')))}\n\n"
-                        f"👥 You can contact the donor at: {html.escape(seller_username_display)}\n\n"
+                        f"👥 You can contact the donor at: {html.escape(seller_username_display)}\n"
                         "💬 On the day of the meetup, please drop them a message on Telegram "
                         "to coordinate exact timing and location."
                     ),
@@ -1019,17 +1016,6 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
                 )
             except Exception as e:
                 logger.error(f"Error notifying buyer (rescheduled): {e}")
-
-            # Try to resolve buyer contact for seller message
-            try:
-                chat = await context.bot.get_chat(buyer_id)
-                if chat.username:
-                    buyer_contact = f"@{chat.username}"
-                else:
-                    buyer_contact = f"{chat.full_name} (ID: {buyer_id})"
-            except Exception as e:
-                logger.error(f"Error fetching buyer chat (rescheduled): {e}")
-                buyer_contact = f"ID: {buyer_id}"
 
             # Notify seller
             try:
@@ -1040,7 +1026,7 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
                         f"🧾 <b>Item:</b> {html.escape(str(item_name))}\n"
                         f"🔢 <b>Quantity:</b> {qty}\n"
                         f"⏰ <b>Pickup:</b> {html.escape(new_time)}\n\n"
-                        f"👥 Requester: {html.escape(buyer_contact)}\n\n"
+                        f"👥 Requester: {html.escape(buyer_username)}\n"
                         "💬 On the day of the meetup, please drop them a message on Telegram "
                         "to coordinate exact timing and location."
                     ),
@@ -1080,6 +1066,114 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
 
     else:
         await q.edit_message_text("❌ Unknown action.")
+
+
+# ========= ADMIN PANEL (/admin + bump) =========
+def is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_USER_IDS
+
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ You are not authorised to use /admin.")
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🔁 Bump unclaimed listings", callback_data="admin_bump")],
+        ]
+    )
+
+    await update.message.reply_text(
+        "🛠 <b>Admin Panel</b>\n\n"
+        "Use the button below to bump all currently unclaimed listings back to the channel.\n"
+        "A short reminder post will be sent with a link to each original listing so that "
+        "new users can tap and claim.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+    )
+
+
+async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    user = q.from_user
+
+    if not is_admin(user.id):
+        await q.answer("You are not authorised to use this.", show_alert=True)
+        return
+
+    data = q.data
+
+    if data == "admin_bump":
+        # Fetch all listings
+        snapshot = listings_ref.get() or {}
+        active: List[Dict[str, Any]] = []
+
+        for listing_id, listing in snapshot.items():
+            remaining = int(listing.get("remaining", listing.get("qty", 0)) or 0)
+            status = listing.get("status", "available")
+            msg_id = listing.get("channel_message_id")
+
+            if remaining > 0 and status == "available" and msg_id:
+                active.append(
+                    {
+                        "id": listing_id,
+                        "item": listing.get("item", "Item"),
+                        "remaining": remaining,
+                        "message_id": msg_id,
+                    }
+                )
+
+        if not active:
+            await q.edit_message_text("ℹ️ There are no active unclaimed listings to bump.")
+            return
+
+        channel_username = (
+            CHANNEL_ID.lstrip("@") if CHANNEL_ID.startswith("@") else None
+        )
+
+        bumped_count = 0
+        for entry in active:
+            item = html.escape(str(entry["item"]))
+            remaining = entry["remaining"]
+            msg_id = entry["message_id"]
+
+            text = (
+                "♻️ <b>Still Available</b>\n\n"
+                f"🧾 <b>Item:</b> {item}\n"
+                f"📦 <b>Remaining:</b> {remaining}\n\n"
+                "Tap below to view the original listing and claim it."
+            )
+
+            # Build link to original channel post (works if channel has a public @username)
+            reply_markup = None
+            if channel_username:
+                message_link = f"https://t.me/{channel_username}/{msg_id}"
+                reply_markup = InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "🔗 View listing & Claim", url=message_link
+                            )
+                        ]
+                    ]
+                )
+
+            try:
+                await context.bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=reply_markup,
+                )
+                bumped_count += 1
+            except Exception as e:
+                logger.error(f"Error sending bump message for listing {entry['id']}: {e}")
+
+        await q.edit_message_text(
+            f"✅ Bumped {bumped_count} unclaimed listing(s) to the channel."
+        )
 
 
 # ========= ERROR HANDLER =========
@@ -1126,6 +1220,7 @@ async def set_commands(app: Application):
             BotCommand("newitem", "List a new item"),
             BotCommand("instructions", "How the bot works"),
             BotCommand("cancel", "Cancel current action"),
+            BotCommand("admin", "Admin panel (authorised users only)"),
         ]
     )
 
@@ -1136,6 +1231,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("instructions", instructions))
     app.add_handler(CommandHandler("cancel", cancel_command))
+    app.add_handler(CommandHandler("admin", admin_command))
     app.add_handler(conv_handler)
 
     # DM text handler (claim flow & seller reschedule flow & generic help)
@@ -1157,6 +1253,9 @@ def main():
     # Inline buttons for help/newitem
     app.add_handler(CallbackQueryHandler(instructions, pattern="^help_info$"))
     app.add_handler(CallbackQueryHandler(newitem_entry, pattern="^newitem_btn$"))
+
+    # Admin callbacks
+    app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
 
     app.add_error_handler(error_handler)
     app.post_init = set_commands
