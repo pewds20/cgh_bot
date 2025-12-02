@@ -120,7 +120,7 @@ def create_listing(data: Dict[str, Any]) -> Optional[str]:
             "created_at": now_ts,
             "status": "available",
             "remaining": qty_numeric,
-            "claims": [],  # list of {user_id, username, qty, pickup_time, status}
+            "claims": [],  # list of {user_id, username, display_name, qty, pickup_time, status}
         }
         new_ref = listings_ref.push(data)
         return new_ref.key
@@ -493,6 +493,7 @@ async def do_post_to_channel(update: Update, context: ContextTypes.DEFAULT_TYPE)
     listing_data = {
         "user_id": user.id,
         "user_name": user.full_name,
+        "user_username": user.username if user.username else None,
         "item": d.get("item"),
         "qty": int(d.get("qty")),
         "qty_display": d.get("qty_display", str(d.get("qty"))),
@@ -589,8 +590,6 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         item_name = listing.get("item", "Item")
         new_time = text
 
-        # Send proposal to buyer
-        buyer_username = f"@{listing.get('buyer_username', '')}"  # may not exist; fallback later
         seller_username = (
             f"@{seller.username}" if seller.username else seller.full_name
         )
@@ -713,7 +712,8 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Build claim object (pending)
         claim = {
             "user_id": buyer.id,
-            "username": buyer.username or buyer.full_name,
+            "username": buyer.username if buyer.username else None,
+            "display_name": buyer.full_name,
             "qty": qty,
             "pickup_time": pickup_time,
             "status": "pending",
@@ -732,7 +732,7 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # Notify seller
-        buyer_username = (
+        buyer_username_for_seller = (
             f"@{buyer.username}" if buyer.username else buyer.full_name
         )
         item_name = listing.get("item", "Item")
@@ -765,7 +765,7 @@ async def private_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "📨 <b>New Claim Request</b>\n\n"
                     f"🧾 <b>Item:</b> {html.escape(str(item_name))}\n"
                     f"🔢 <b>Quantity:</b> {qty}\n"
-                    f"👤 <b>From:</b> {html.escape(buyer_username)}\n"
+                    f"👤 <b>From:</b> {html.escape(buyer_username_for_seller)}\n"
                     f"⏰ <b>Requested pickup:</b> {html.escape(pickup_time)}\n\n"
                     "Please approve, reject, or suggest a new time:"
                 ),
@@ -956,8 +956,12 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
         item_name = listing.get("item", "Item")
         seller_id = listing.get("user_id")
         seller_name = listing.get("user_name", "Donor")
-        # seller username not stored; buyer can reply in the DM thread
-        seller_username_display = seller_name
+        seller_username_stored = listing.get("user_username")
+        seller_username_display = (
+            f"@{seller_username_stored}"
+            if seller_username_stored
+            else seller_name
+        )
 
         # --- Buyer accepts new time ---
         if action == "accept_newtime":
