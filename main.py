@@ -844,6 +844,17 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
                 },
             )
 
+            # Try to resolve buyer contact as @username (preferred) or full name + ID
+            try:
+                chat = await context.bot.get_chat(user_id)
+                if chat.username:
+                    buyer_contact = f"@{chat.username}"
+                else:
+                    buyer_contact = f"{chat.full_name} (ID: {user_id})"
+            except Exception as e:
+                logger.error(f"Error fetching buyer chat for contact: {e}")
+                buyer_contact = f"ID: {user_id}"
+
             # Update channel post
             await update_channel_post(context, listing_id)
 
@@ -856,15 +867,22 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
                         f"({qty} units) has been <b>approved</b>!\n\n"
                         f"⏰ Pickup: {html.escape(pickup_time)}\n"
                         f"📍 Location: {html.escape(str(listing.get('location', 'N/A')))}\n\n"
-                        f"👥 You can contact the donor at: {html.escape(seller_username)}"
+                        f"👥 You can contact the donor at: {html.escape(seller_username)}\n\n"
+                        "💬 On the day of the meetup, please drop them a message on Telegram "
+                        "to coordinate exact timing and location."
                     ),
                     parse_mode=ParseMode.HTML,
                 )
             except Exception as e:
                 logger.error(f"Error notifying buyer: {e}")
 
+            # Notify seller (confirmation with buyer contact)
             await q.edit_message_text(
-                f"✅ Approved {qty} × {item_name} for user ID {user_id}."
+                (
+                    f"✅ Approved {qty} × {item_name} for {buyer_contact}.\n\n"
+                    "💬 On the day of the meetup, please drop them a message on Telegram "
+                    "to coordinate exact timing and location."
+                )
             )
             return
 
@@ -984,12 +1002,25 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
                         f"({qty} units) is <b>confirmed</b> with the new time.\n\n"
                         f"⏰ Pickup: {html.escape(new_time)}\n"
                         f"📍 Location: {html.escape(str(listing.get('location', 'N/A')))}\n\n"
-                        f"👥 You can contact the donor at: {html.escape(seller_username_display)}"
+                        f"👥 You can contact the donor at: {html.escape(seller_username_display)}\n\n"
+                        "💬 On the day of the meetup, please drop them a message on Telegram "
+                        "to coordinate exact timing and location."
                     ),
                     parse_mode=ParseMode.HTML,
                 )
             except Exception as e:
                 logger.error(f"Error notifying buyer (rescheduled): {e}")
+
+            # Try to resolve buyer contact for seller message
+            try:
+                chat = await context.bot.get_chat(buyer_id)
+                if chat.username:
+                    buyer_contact = f"@{chat.username}"
+                else:
+                    buyer_contact = f"{chat.full_name} (ID: {buyer_id})"
+            except Exception as e:
+                logger.error(f"Error fetching buyer chat (rescheduled): {e}")
+                buyer_contact = f"ID: {buyer_id}"
 
             # Notify seller
             try:
@@ -1000,7 +1031,9 @@ async def handle_claim_decision(update: Update, context: ContextTypes.DEFAULT_TY
                         f"🧾 <b>Item:</b> {html.escape(str(item_name))}\n"
                         f"🔢 <b>Quantity:</b> {qty}\n"
                         f"⏰ <b>Pickup:</b> {html.escape(new_time)}\n\n"
-                        f"👥 Requester: {html.escape(buyer_username)}"
+                        f"👥 Requester: {html.escape(buyer_contact)}\n\n"
+                        "💬 On the day of the meetup, please drop them a message on Telegram "
+                        "to coordinate exact timing and location."
                     ),
                     parse_mode=ParseMode.HTML,
                 )
