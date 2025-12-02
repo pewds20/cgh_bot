@@ -440,7 +440,7 @@ async def confirm_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption = (
         "📝 <b>Confirm Your Listing</b>\n\n"
         f"🧾 <b>Item:</b> {html.escape(str(d.get('item')))}\n"
-        f"📦 <b>Quantity:</b> {html.escape(str(d.get('qty_display', d.get('qty')))} )\n"
+        f"📦 <b>Quantity:</b> {html.escape(str(d.get('qty_display', d.get('qty'))))}\n"
         f"📏 <b>Size:</b> {html.escape(str(d.get('size')))}\n"
         f"⏰ <b>Expiry:</b> {html.escape(str(d.get('expiry')))}\n"
         f"📍 <b>Location:</b> {html.escape(str(d.get('location')))}\n"
