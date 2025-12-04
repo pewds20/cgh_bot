@@ -17,8 +17,7 @@ This repository contains the full bot source code, deployment configuration, and
 - Photo support for listings  
 - Reply buttons + inline claiming system  
 - Automatic updates to channel posts (remaining qty, status, etc.)  
-- Firebase-backed database for reliability  
-- Auto-expiry of old listings (7-day rule)  
+- Firebase-backed database for reliability   
 - Custom error handler and logging  
 - Keep-alive HTTP endpoint for uptime monitoring  
 - Hosted on Render (free tier)
