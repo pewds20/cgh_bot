@@ -53,8 +53,11 @@ logger = logging.getLogger(__name__)
 
 # ========= CONFIG =========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-FIREBASE_DB_URL = os.getenv("FIREBASE_DB_URL")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "@Sustainability_Redistribution")
+FIREBASE_DB_URL = os.getenv(
+    "FIREBASE_DB_URL",
+    "https://cgh-telebot-default-rtdb.asia-southeast1.firebasedatabase.app/",
+)
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
