@@ -1208,7 +1208,10 @@ conv_handler = ConversationHandler(
     fallbacks=[
         CallbackQueryHandler(cancel_post, pattern="^cancel_post$"),
         CommandHandler("cancel", cancel_post),
+        # 🔁 Allow /newitem to restart the flow from any state
+        CommandHandler("newitem", newitem_entry),
     ],
+    allow_reentry=True,  # 🔁 Let users re-enter via /newitem even if conversation is active
 )
 
 
@@ -1250,9 +1253,8 @@ def main():
         )
     )
 
-    # Inline buttons for help/newitem
+    # Inline button for help
     app.add_handler(CallbackQueryHandler(instructions, pattern="^help_info$"))
-    app.add_handler(CallbackQueryHandler(newitem_entry, pattern="^newitem_btn$"))
 
     # Admin callbacks
     app.add_handler(CallbackQueryHandler(admin_callback, pattern="^admin_"))
